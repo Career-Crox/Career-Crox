@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Recent Activity • Career Crox CRM{% endblock %}
+{% block page_title %}Recent Activity{% endblock %}
+{% block page_subtitle %}Live employee movement, actions, and profile-level activity from the last 24 hours.{% endblock %}
+{% block content %}
+<div class="table-panel top-gap-small glassy-card fade-up">
+  <div class="table-toolbar compact-toolbar compact-toolbar-v2">
+    <form method="GET" class="toolbar-actions filter-bar colorful-filter-bar" id="recentActivityFilterForm">
+      <select class="inline-input colorful-input" name="user_id" id="recentActivitySelect">
+        <option value="">All visible team members</option>
+        {% for member in activity_members %}
+        <option value="{{ member['user_id'] }}" {% if selected_user_id==member['user_id'] %}selected{% endif %}>{{ member['full_name'] }} • {{ member['designation'] }}{% if member['recruiter_code'] %} • {{ member['recruiter_code'] }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      <button class="ghost-btn bounceable" type="submit">Apply</button>
+    </form>
+    <div class="toolbar-actions">
+      <span class="mini-chip">Auto refresh: 20s</span>
+      <span class="mini-chip">History retained: 24h</span>
+    </div>
+  </div>
+</div>
+
+<div class="dashboard-grid top-gap recent-activity-grid">
+  <div class="table-panel glassy-card fade-up">
+    <div class="table-toolbar"><div><div class="table-title">Live Status</div><div class="subtle">A red card means no movement was detected for the past 3 minutes.</div></div></div>
+    <div class="recent-activity-status-grid" id="recentActivitySummaryGrid">
+      {% for row in activity_summary %}
+      <div class="recent-activity-status-card {{ row['state_class'] }}">
+        <div class="activity-name">{{ row['full_name'] }}</div>
+        <div class="activity-sub">{{ row['designation'] }}{% if row['recruiter_code'] %} • {{ row['recruiter_code'] }}{% endif %}</div>
+        <div class="top-gap-small helper-text">Last seen: {{ row['last_seen'] or 'Not available' }}</div>
+        <div class="recent-activity-state {{ row['state_class'] }}">{{ row['state'] }}</div>
+        <div class="helper-text top-gap-small">Latest action: {{ row['latest_action'] or 'No recent action' }}</div>
+      </div>
+      {% else %}
+      <div class="helper-text">No visible team activity found.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="table-panel glassy-card fade-up">
+    <div class="table-toolbar"><div><div class="table-title">Action Feed</div><div class="subtle">Exact timestamps are shown with seconds.</div></div><div class="toolbar-actions"><button class="mini-btn view bounceable" type="button" data-configure-table="recentActivityTable">Columns</button></div></div>
+    <div class="crm-table-wrap dense-wrap">
+      <table class="crm-table colorful-table dense-table" id="recentActivityTable" data-configurable-table="1" data-config-title="Recent Activity Feed">
+        <thead>
+          <tr>
+            <th data-col-key="when">When</th>
+            <th data-col-key="employee">Employee</th>
+            <th data-col-key="designation">Designation</th>
+            <th data-col-key="recruiter">Recruiter Code</th>
+            <th data-col-key="action">Action</th>
+            <th data-col-key="candidate">Candidate ID</th>
+            <th data-col-key="metadata">Details</th>
+          </tr>
+        </thead>
+        <tbody id="recentActivityTableBody">
+          {% for row in activity_rows %}
+          <tr>
+            <td>{{ row['when'] }}</td>
+            <td>{{ row['full_name'] }}</td>
+            <td>{{ row['designation'] }}</td>
+            <td>{{ row['recruiter_code'] }}</td>
+            <td>{{ row['action'] }}</td>
+            <td>{{ row['candidate_id'] }}</td>
+            <td>{{ row['metadata'] }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7">No recent activity found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function(){
+  const select=document.getElementById('recentActivitySelect');
+  const body=document.getElementById('recentActivityTableBody');
+  const summaryGrid=document.getElementById('recentActivitySummaryGrid');
+  async function refreshFeed(){
+    try{
+      const query=select && select.value ? `?user_id=${encodeURIComponent(select.value)}` : '';
+      const r=await fetch(`{{ url_for('recent_activity_feed_api') }}${query}`);
+      const data=await r.json();
+      if(!data.ok) return;
+      const rows=data.rows||[];
+      body.innerHTML=rows.length ? rows.map(row=>`<tr><td>${row.when||''}</td><td>${row.full_name||''}</td><td>${row.designation||''}</td><td>${row.recruiter_code||''}</td><td>${row.action||''}</td><td>${row.candidate_id||''}</td><td>${row.metadata||''}</td></tr>`).join('') : '<tr><td colspan="7">No recent activity found.</td></tr>';
+      const summary=data.summary||[];
+      summaryGrid.innerHTML=summary.length ? summary.map(row=>`<div class="recent-activity-status-card ${row.state_class||''}"><div class="activity-name">${row.full_name||''}</div><div class="activity-sub">${row.designation||''}${row.recruiter_code ? ' • ' + row.recruiter_code : ''}</div><div class="top-gap-small helper-text">Last seen: ${row.last_seen||'Not available'}</div><div class="recent-activity-state ${row.state_class||''}">${row.state||''}</div><div class="helper-text top-gap-small">Latest action: ${row.latest_action||'No recent action'}</div></div>`).join('') : '<div class="helper-text">No visible team activity found.</div>';
+    }catch(e){}
+  }
+  setInterval(refreshFeed, 20000);
+})();
+</script>
+{% endblock %}
