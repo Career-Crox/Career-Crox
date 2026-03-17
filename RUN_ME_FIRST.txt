@@ -1,0 +1,13 @@
+Career Crox CRM - quick local test
+
+Best method on Windows:
+1) Double click RUN_CRM.bat
+
+Manual method:
+1) Open terminal in this folder
+2) Run: py -m pip install -r requirements.txt
+3) Run: py app.py
+4) Open: http://127.0.0.1:5000
+
+Do not run app.py directly as a shell command.
+That can fail or do nothing in some VS Code setups.
