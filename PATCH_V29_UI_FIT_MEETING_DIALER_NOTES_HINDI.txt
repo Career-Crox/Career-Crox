@@ -1,0 +1,9 @@
+PATCH V29
+- Meeting Room me Create meeting option add kiya
+- Meeting page ko compact aur English-first kiya
+- Extra meeting info blocks hata kar cleaner layout diya
+- Room setup ko compact toggle ke andar shift kiya
+- Client Pipeline ka extra search/export panel hata diya
+- Dialer ko fixed overlay se hata kar proper side panel layout diya
+- Dialer ko 100% zoom par better fit ke liye compact kiya
+- Top header overlap reduce karne ke liye responsive topbar fix add kiya

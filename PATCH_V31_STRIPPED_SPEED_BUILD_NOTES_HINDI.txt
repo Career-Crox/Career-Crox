@@ -1,0 +1,27 @@
+V31 STRIPPED SPEED BUILD
+
+HATAYA GAYA:
+- Client Pipeline
+- Revenue Hub
+- AI Operations
+- Meeting Room
+- Learning Hub
+- Social Career Crox
+- Wallet & Rewards
+- Payout Tracker
+- Theme Studio sidebar panel
+- Aaria floating assistant UI
+- Heavy animation / transition effects
+
+SPEED CHANGES:
+- Dashboard ko lightweight version diya gaya
+- Candidates list me default pagination / slicing add ki gayi
+- Performance Centre me revenue dependency hata kar billed/collected ko 0 fallback par rakha gaya
+- Removed modules ke routes dashboard par redirect karte hain
+- Sidebar aur quick-add se removed modules hata diye gaye
+
+EXPECTED RESULT:
+- Lighter DOM
+- Kam route clutter
+- Kam backend path usage
+- Better perceived speed on Render free
