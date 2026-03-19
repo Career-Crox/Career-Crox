@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ active_theme }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Career Crox CRM{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="app-shell speed-shell">
+    <aside class="sidebar speed-sidebar">
+        <div class="brand-box glassy-card compact-brand-box speed-brand-box">
+            <div class="compact-brand-row">
+                <img class="compact-brand-logo" src="{{ url_for('static', filename='img/career-crox-icon.svg') }}" alt="Career Crox">
+                <div>
+                    <div class="brand-mini">Career Crox</div>
+                    <div class="brand-wordmark small-wordmark">Recruitment CRM</div>
+                </div>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            {% set nav_order = ['Dashboard','Candidates','Submissions','Submission Slice','Interviews','Tasks','Attendance & Breaks','Reports','Performance Centre','JD Centre','Dialer','Admin Control'] %}
+            {% for wanted in nav_order %}
+                {% for label, endpoint, kwargs in sidebar_items %}
+                    {% if label == wanted and label != "Let's Chit-Chat" %}
+                        {% set role = current_user_data.role if current_user_data else '' %}
+                        {% if (label in ['Admin Control'] and role != 'manager') or (label in ['Performance Centre','Reports'] and role not in ['manager','tl']) %}
+                        {% else %}
+                        {% set link = url_for(endpoint, **kwargs) %}
+                        {% set active = request.path == link or (endpoint == 'module_page' and request.path.startswith('/module/' ~ kwargs.get('slug'))) %}
+                        <a class="nav-item {% if active %}active{% endif %} {% if label in ['Admin Control','Performance Centre'] %}manager-only-link{% endif %}" href="{{ link }}" {% if label in ['Admin Control','Performance Centre'] %}data-manager-only="1"{% endif %}><span>{{ label }}</span></a>
+                        {% endif %}
+                    {% endif %}
+                {% endfor %}
+            {% endfor %}
+        </nav>
+    </aside>
+
+    <main class="main-wrap speed-main-wrap">
+        <header class="topbar compact-topbar-shell">
+            <div class="topbar-left">
+                <div class="topbar-title topbar-brand-title"><img class="topbar-logo" src="{{ url_for('static', filename='img/career-crox-icon.svg') }}" alt="Career Crox"><span>{% block page_title %}Career Crox Dashboard{% endblock %}</span></div>
+                <div class="topbar-sub">Fast CRM workspace</div>
+            </div>
+            <div class="topbar-center">
+                <form class="search-box" method="GET" action="{{ url_for('global_search') }}"><input type="text" name="q" placeholder="Search" value="{{ request.args.get('q', '') }}"><button class="ghost-btn" type="submit">Go</button></form>
+            </div>
+            <div class="topbar-right compact-topbar-actions">
+                <div class="top-action-wrap">
+                    <button class="add-profile-btn" type="button" id="addMenuButton">Quick Add</button>
+                    <div class="add-menu glassy-card professional-add-menu" id="addMenuPanel">
+                        <a href="#" data-quick-modal="candidate-modal">Add Candidate</a>
+                        <a href="#" data-quick-modal="note-modal">Add Note</a>
+                        {% if current_user_data and current_user_data.role in ['manager','tl'] %}<a href="#" data-quick-modal="task-modal">Add Task</a>{% endif %}
+                        {% if current_user_data and current_user_data.role in ['manager','tl'] %}<a href="#" data-quick-modal="jd-modal">Add JD</a>{% endif %}
+                        <a href="#" data-quick-modal="interview-modal">Add Interview</a>
+                        <a href="{{ url_for('submissions') }}">Open Submissions</a>
+                        <a href="{{ url_for('submission_slice') }}">Submission Slice</a>
+                        {% if current_user_data and current_user_data.role in ['manager','tl'] %}<a href="{{ url_for('reports_page') }}">Open Reports</a>{% endif %}
+                        {% if leadership_role %}<a href="{{ url_for('performance_centre_page') }}">Performance Centre</a>{% endif %}
+                        <a href="{{ url_for('attendance_breaks') }}">Attendance &amp; Breaks</a>
+                    </div>
+                </div>
+                {% if current_user_data and current_user_data.role in ['manager','tl'] %}<a class="top-pill" href="{{ url_for('approvals_page') }}">Approvals</a>{% endif %}
+                <a class="top-pill" href="{{ url_for('notifications_page') }}">Notifications</a>
+                <a class="top-pill" href="{{ url_for('chat_page') }}">Team Chat</a>
+                {% if current_user_data %}
+                <div class="user-chip glassy-card user-chip-menu">
+                    <div>
+                        <div class="user-name">{{ current_user_data['full_name'] }}</div>
+                        <div class="user-role">{{ current_user_data['designation'] }}</div>
+                        {% if session.get('impersonator') %}<div class="impersonation-line">Viewing as team member</div>{% endif %}
+                    </div>
+                    <div class="user-chip-actions">
+                        {% if can_switch_back %}<a class="mini-btn view logout-mini" href="{{ url_for('stop_impersonation') }}">Back to head account</a>{% endif %}
+                        <a class="mini-btn edit logout-mini" href="{{ url_for('logout') }}">Logout</a>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </header>
+
+        <section class="page-scroll">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-stack">
+                        {% for category, message in messages %}
+                            <div class="flash {{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+            {% block content %}{% endblock %}
+        </section>
+    </main>
+</div>
+
+{% if current_lock_state.locked %}
+<div class="crm-lock-overlay show">
+  <div class="crm-lock-card glassy-card">
+    <div class="panel-title">CRM Locked</div>
+    <p>{{ current_lock_state.reason }}</p>
+    {% if current_lock_state.request_id %}<div class="helper-text">Request ID: {{ current_lock_state.request_id }}</div>{% endif %}
+    <div class="lock-late-box top-gap-small">
+      <span>Late running timer</span>
+      <strong id="lockLateTimer" data-requested-at="{{ current_lock_state.requested_at }}">00:00:00</strong>
+    </div>
+    <div class="helper-text top-gap-small">The timer shows how long the request has remained overdue.</div>
+    <div class="top-gap-small">
+      {% if current_lock_state.pending %}
+      <button class="submit-btn slim-btn muted-btn" type="button" disabled>Approval request sent</button>
+      {% else %}
+      <form method="POST" action="{{ url_for('attendance_request_unlock') }}">
+        <input type="hidden" name="reason" value="{{ current_lock_state.reason or 'Unlock approval requested from locked CRM popup' }}">
+        <button class="submit-btn slim-btn" type="submit">Request for approval</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% include "_quick_modals.html" ignore missing %}
+
+<script>
+(function(){
+  const addBtn=document.getElementById('addMenuButton');
+  const addPanel=document.getElementById('addMenuPanel');
+  if(addBtn&&addPanel){
+    addBtn.addEventListener('click', function(e){
+      e.preventDefault();
+      addPanel.classList.toggle('open');
+    });
+    document.addEventListener('click', function(e){
+      if(!addPanel.contains(e.target) && e.target!==addBtn){
+        addPanel.classList.remove('open');
+      }
+    });
+  }
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
