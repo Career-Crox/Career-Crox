@@ -5,3 +5,8 @@ requests==2.31.0
 python-dotenv==1.0.1
 urllib3==1.26.18
 charset-normalizer==3.3.2
+python-docx==1.1.2
+pypdf==5.3.0
+Pillow==10.4.0
+reportlab==4.2.5
+pytesseract==0.3.13
