@@ -1,6 +1,0 @@
-V30 meeting popup patch
-- Create meeting ab Google Meet ko controlled popup me kholta hai aur CRM ko front par rakhta hai.
-- Saved room link ho to wahi popup me khulta hai.
-- Fresh room banana ho to meet.google.com/new popup me khulega.
-- Paste copied Meet link button se active room me copied Meet URL save ho sakta hai.
-- Bring Meet front button se same popup dubara saamne laa sakte ho.
