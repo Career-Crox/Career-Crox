@@ -1,7 +1,0 @@
-
-1) Open this folder in VS Code
-2) Install requirements
-3) Run: python app.py
-4) Login with demo user
-5) GitHub upload: all files in this folder
-6) Render root directory = this folder
