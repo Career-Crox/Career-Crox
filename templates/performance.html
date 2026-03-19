@@ -1,0 +1,73 @@
+
+{% extends "base.html" %}
+{% set title = "Performance Center" %}
+{% set heading = "Performance Center" %}
+{% set subtitle = "Lightweight proactivity and productivity reporting, intentionally kept simple so the CRM does not crawl." %}
+{% block content %}
+<div class="card-grid four">
+  <div class="stat-card"><span>Calls Logged</span><strong>{{ summary.calls_logged }}</strong></div>
+  <div class="stat-card"><span>Updates Logged</span><strong>{{ summary.updates_logged }}</strong></div>
+  <div class="stat-card"><span>Interview Actions</span><strong>{{ summary.interview_actions }}</strong></div>
+  <div class="stat-card"><span>Billed Visibility</span><strong>₹{{ summary.billed_visibility }}</strong></div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h3>Performance Search and Export</h3></div>
+  <form class="inline-form" method="get">
+    <select name="user_code">
+      <option value="all">All recruiters and TLs</option>
+      {% for row in users %}
+      <option value="{{ row.user_code }}" {% if selected_code == row.user_code %}selected{% endif %}>{{ row.full_name }} ({{ row.user_code }})</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-light">Apply</button>
+    <a class="btn btn-light" href="{{ url_for('reports') }}">Excel</a>
+    <a class="btn btn-light" href="{{ url_for('reports') }}">CSV</a>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h3>Recruiter and TL Productivity</h3></div>
+  <div class="table-wrap">
+    <table class="data-table compact">
+      <thead>
+        <tr>
+          <th>Name</th><th>Designation</th><th>Code</th><th>Candidates</th><th>Open Tasks</th><th>Calls</th><th>Updates</th><th>Interviews</th><th>Last Seen</th><th>State</th><th>Billed</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.full_name }}</td>
+        <td>{{ row.designation }}</td>
+        <td>{{ row.user_code }}</td>
+        <td>{{ row.candidates }}</td>
+        <td>{{ row.open_tasks }}</td>
+        <td>{{ row.calls }}</td>
+        <td>{{ row.updates }}</td>
+        <td>{{ row.interviews }}</td>
+        <td>{{ row.last_seen }}</td>
+        <td>{{ row.state }}</td>
+        <td>₹{{ row.billed_visibility }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="11" class="empty">No rows.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h3>Suspicious Activity Alerts</h3></div>
+  {% if alerts %}
+    <div class="list-stack">
+      {% for alert in alerts %}
+      <div class="flash flash-warning">{{ alert }}</div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">No live abuse alert right now.</div>
+  {% endif %}
+</section>
+{% endblock %}

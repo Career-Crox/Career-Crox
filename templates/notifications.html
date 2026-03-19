@@ -1,0 +1,20 @@
+
+{% extends "base.html" %}
+{% set title = "Notifications" %}
+{% set heading = "Notifications" %}
+{% set subtitle = "Profile approval, tasks, reports, updates. The usual human-generated avalanche." %}
+{% block content %}
+<section class="panel">
+  <div class="list-stack">
+    {% for row in rows %}
+    <div class="mini-item">
+      <div class="mini-title">{{ row.title }}</div>
+      <div class="mini-meta">{{ row.created_at }} · {{ row.kind }}</div>
+      <div class="mini-body">{{ row.message }}</div>
+    </div>
+    {% else %}
+    <div class="empty">No notifications yet.</div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
