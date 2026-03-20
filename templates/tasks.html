@@ -1,0 +1,60 @@
+
+{% extends "base.html" %}
+{% set title = "Tasks" %}
+{% set heading = "Tasks" %}
+{% set subtitle = "Any employee can assign a task to any employee. Miracles do happen." %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><h3>Assign Task</h3></div>
+  <form method="post" class="grid form-grid">
+    <label>
+      <span>Assign To</span>
+      <input type="text" name="assigned_to" list="user-list" placeholder="RC201 / name search">
+      <datalist id="user-list">
+        {% for row in users %}
+        <option value="{{ row.user_code }}">{{ row.full_name }}</option>
+        {% endfor %}
+      </datalist>
+    </label>
+    <label><span>Title</span><input type="text" name="title" required></label>
+    <label><span>Status</span>
+      <select name="status">
+        <option value="open">Open</option>
+        <option value="pending">Pending</option>
+        <option value="done">Done</option>
+      </select>
+    </label>
+    <label class="full"><span>Details</span><textarea name="details" rows="3"></textarea></label>
+    <div class="full"><button class="btn btn-primary">Send Task</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h3>Task Table</h3>
+    <form class="inline-form" method="get">
+      <input type="text" name="q" value="{{ search }}" placeholder="Search task / employee">
+      <button class="btn btn-light">Search</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th><input type="checkbox" class="select-all"></th><th>Assigned To</th><th>Assigned By</th><th>Title</th><th>Status</th><th>Created</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+      <tr>
+        <td><input type="checkbox" class="row-check"></td>
+        <td>{{ row.target_name or row.assigned_to }}</td>
+        <td>{{ row.assigned_by_name or row.assigned_by }}</td>
+        <td>{{ row.title }}<div class="subtext">{{ row.details }}</div></td>
+        <td><span class="status {{ row.status }}">{{ row.status }}</span></td>
+        <td>{{ row.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No tasks found.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

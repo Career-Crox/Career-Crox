@@ -1,0 +1,1 @@
+-- Supabase-only build. Local SQLite schema is intentionally not used in this version.
