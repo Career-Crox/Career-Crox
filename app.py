@@ -1,4 +1,3 @@
-
 import csv
 import os
 from collections import defaultdict
@@ -10,7 +9,6 @@ from urllib.parse import quote
 
 from flask import Flask, flash, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.utils import secure_filename
-
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -124,7 +122,6 @@ def insert_and_get_id(sql, params=()):
 
 
 def safe_int(value, default=0):
-
     try:
         return int(float(value))
     except Exception:
@@ -160,6 +157,13 @@ def login_required(fn):
     def wrapped(*args, **kwargs):
         if not session.get("user_code"):
             return redirect(url_for("login"))
+
+        user = current_user()
+        if not user:
+            session.clear()
+            flash("Session expired. Please login again.", "error")
+            return redirect(url_for("login"))
+
         return fn(*args, **kwargs)
     return wrapped
 
@@ -184,7 +188,6 @@ def is_leader():
     return session.get("role") in ("manager", "tl")
 
 
-
 # ---------- database ----------
 # Supabase/Postgres only build.
 # Run the SQL from 3_SUPABASE before deploying.
@@ -203,6 +206,7 @@ def maybe_add_master_option(category, new_value, created_by):
     new_value = (new_value or "").strip()
     if not new_value:
         return None
+
     existing = q_one(
         "select * from master_options where lower(category)=lower(?) and lower(value)=lower(?)",
         (category, new_value),
@@ -237,6 +241,9 @@ MANDATORY_INTERESTED_FIELDS = [
 
 def build_profile_payload(form, files=None):
     user = current_user()
+    if not user:
+        raise ValueError("Session expired. Please login again.")
+
     recruiter_code = user["user_code"]
     recruiter_name = user["full_name"]
 
@@ -267,7 +274,6 @@ def build_profile_payload(form, files=None):
         if payload.get(key) == "__add_new__":
             payload[key] = ""
 
-    # inline add-new fields
     for category, field in [
         ("location", "location"),
         ("location", "preferred_location"),
@@ -294,7 +300,6 @@ def build_profile_payload(form, files=None):
         if not payload["candidate_name"]:
             payload["candidate_name"] = "Untitled Lead"
 
-    # derived ranges
     rel_exp = safe_int(payload["relevant_experience"])
     if rel_exp <= 0:
         payload["relevant_experience_range"] = "0"
@@ -356,14 +361,16 @@ def save_profile(payload, profile_id=None, action="save"):
             raise ValueError("Profile not found.")
         if is_recruiter() and old["recruiter_code"] != session.get("user_code"):
             raise ValueError("Access denied.")
+
         keep_resume = old["resume_file"] if not payload["resume_file"] else payload["resume_file"]
         keep_recording = old["recording_file"] if not payload["recording_file"] else payload["recording_file"]
+
         update_values = [
             payload["recruiter_code"], payload["recruiter_name"], payload["candidate_name"], payload["phone"], payload["email"],
             payload["qualification"], payload["location"], payload["preferred_location"], payload["degree"], payload["process"],
             payload["total_experience"], payload["relevant_experience"], payload["inhand_monthly"], payload["ctc_monthly"],
             payload["career_gap"], payload["call_connected"], payload["job_interest"], payload["interview_availability"],
-            payload["notes"], payload.get("submission_date",""), keep_resume, keep_recording,
+            payload["notes"], payload.get("submission_date", ""), keep_resume, keep_recording,
             payload["relevant_experience_range"], payload["relevant_inhand_range"], draft_status, now_str(), profile_id,
         ]
         execute(
@@ -429,6 +436,7 @@ def build_metrics_for_user(user_code):
     user = q_one("select * from users where user_code=?", (user_code,))
     if not user:
         return {}
+
     profiles_total = q_one("select count(*) c from profiles where recruiter_code=?", (user_code,))["c"]
     submissions_total = q_one("select count(*) c from submissions where recruiter_code=?", (user_code,))["c"]
     approvals_pending = q_one("select count(*) c from profiles where recruiter_code=? and workflow_status='pending_approval'", (user_code,))["c"]
@@ -468,7 +476,7 @@ def team_metrics(filter_code=None):
     codes = [r["user_code"] for r in q_all("select user_code from users where role in ('recruiter','tl') order by role desc, full_name")]
     if filter_code and filter_code != "all":
         codes = [c for c in codes if c == filter_code]
-    return [build_metrics_for_user(code) for code in codes]
+    return [build_metrics_for_user(code) for code in codes if build_metrics_for_user(code)]
 
 
 def save_generated_report(owner_user_code, target_user_code="all", report_type="team"):
@@ -550,14 +558,18 @@ def ensure_due_followup_notifications():
         )
 
 
-
 # ---------- context ----------
 @app.context_processor
 def inject_globals():
     user = current_user()
     unread = 0
-    if user:
-        unread = q_one("select count(*) c from notifications where user_code=? and is_read=0", (user["user_code"],))["c"]
+    if user and user.get("user_code"):
+        unread_row = q_one(
+            "select count(*) c from notifications where user_code=? and is_read=0",
+            (user["user_code"],),
+        )
+        unread = unread_row["c"] if unread_row else 0
+
     return {
         "me": user,
         "today": today_str(),
@@ -591,23 +603,28 @@ def health():
 def login():
     if session.get("user_code"):
         return redirect(url_for("dashboard"))
+
     if request.method == "POST":
         code = request.form.get("user_code", "").strip().upper()
         password = request.form.get("password", "").strip()
+
         app.logger.info("LOGIN ATTEMPT backend=postgres user=%s", code)
         user = q_one(
             "select * from users where user_code=? and password=? and is_active=1",
             (code, password),
         )
+
         if not user:
             app.logger.warning("LOGIN FAILED user=%s", code)
             flash("Invalid login details.", "error")
             return render_template("login.html")
+
         app.logger.info("LOGIN SUCCESS user=%s role=%s", user["user_code"], user["role"])
         session["user_code"] = user["user_code"]
         session["full_name"] = user["full_name"]
         session["role"] = user["role"]
         return redirect(url_for("dashboard"))
+
     return render_template("login.html")
 
 
@@ -622,6 +639,11 @@ def logout():
 @login_required
 def dashboard():
     user = current_user()
+    if not user:
+        session.clear()
+        flash("Session expired. Please login again.", "error")
+        return redirect(url_for("login"))
+
     if is_recruiter():
         where = " where recruiter_code=? "
         params = [user["user_code"]]
@@ -630,18 +652,48 @@ def dashboard():
         params = []
 
     cards = {
-        "profiles_today": q_one("select count(*) c from profiles " + where + (" and " if where else " where ") + "left(created_at, 10)=current_date::text", params)["c"],
+        "profiles_today": q_one(
+            "select count(*) c from profiles " + where + (" and " if where else " where ") + "left(created_at, 10)=current_date::text",
+            params,
+        )["c"],
         "total_profiles": q_one("select count(*) c from profiles " + where, params)["c"],
-        "pending_approvals": q_one("select count(*) c from profiles " + (where + " and " if where else " where ") + "workflow_status='pending_approval'", params)["c"],
-        "interviews_today": q_one("select count(*) c from interviews " + recruiter_only_filter("")[0].replace("recruiter_code", "recruiter_code") + (" and " if recruiter_only_filter("")[0] else " where ") + "left(interview_at, 10)=current_date::text", recruiter_only_filter("")[1])["c"],
-        "open_tasks": q_one("select count(*) c from tasks where assigned_to=? and status in ('open','pending')", (user["user_code"],))["c"] if is_recruiter() else q_one("select count(*) c from tasks where status in ('open','pending')")["c"],
-        "reports": q_one("select count(*) c from reports where owner_user_code=?", (user["user_code"],))["c"] if is_recruiter() else q_one("select count(*) c from reports")["c"],
+        "pending_approvals": q_one(
+            "select count(*) c from profiles " + (where + " and " if where else " where ") + "workflow_status='pending_approval'",
+            params,
+        )["c"],
+        "interviews_today": q_one(
+            "select count(*) c from interviews " + recruiter_only_filter("")[0] + (" and " if recruiter_only_filter("")[0] else " where ") + "left(interview_at, 10)=current_date::text",
+            recruiter_only_filter("")[1],
+        )["c"],
+        "open_tasks": q_one(
+            "select count(*) c from tasks where assigned_to=? and status in ('open','pending')",
+            (user["user_code"],),
+        )["c"] if is_recruiter() else q_one("select count(*) c from tasks where status in ('open','pending')")["c"],
+        "reports": q_one(
+            "select count(*) c from reports where owner_user_code=?",
+            (user["user_code"],),
+        )["c"] if is_recruiter() else q_one("select count(*) c from reports")["c"],
     }
+
     recent_profiles = q_all("select * from profiles " + where + " order by id desc limit 6", params)
-    recent_submissions = q_all("select * from submissions " + (" where recruiter_code=? " if is_recruiter() else "") + " order by id desc limit 6", (user["user_code"],) if is_recruiter() else ())
-    notifications = q_all("select * from notifications where user_code=? order by id desc limit 6", (user["user_code"],))
+    recent_submissions = q_all(
+        "select * from submissions " + (" where recruiter_code=? " if is_recruiter() else "") + " order by id desc limit 6",
+        (user["user_code"],) if is_recruiter() else (),
+    )
+    notifications = q_all(
+        "select * from notifications where user_code=? order by id desc limit 6",
+        (user["user_code"],),
+    )
     perf_rows = team_metrics(None if not is_recruiter() else user["user_code"])
-    return render_template("dashboard.html", cards=cards, recent_profiles=recent_profiles, recent_submissions=recent_submissions, notifications=notifications, perf_rows=perf_rows)
+
+    return render_template(
+        "dashboard.html",
+        cards=cards,
+        recent_profiles=recent_profiles,
+        recent_submissions=recent_submissions,
+        notifications=notifications,
+        perf_rows=perf_rows,
+    )
 
 
 # ---------- profiles ----------
@@ -651,6 +703,7 @@ def profiles():
     q = request.args.get("q", "").strip()
     filters = []
     params = []
+
     if is_recruiter():
         filters.append("recruiter_code=?")
         params.append(session["user_code"])
@@ -664,6 +717,7 @@ def profiles():
     if filters:
         sql += " where " + " and ".join(filters)
     sql += " order by id desc limit 100"
+
     rows = q_all(sql, params)
     return render_template("profiles.html", rows=rows, search=q, masters=_masters_bundle())
 
@@ -678,11 +732,15 @@ def profile_new():
             profile_id = save_profile(payload, action=action)
             note = payload.get("notes", "").strip()
             if note:
-                execute("insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)", (profile_id, session["user_code"], note, now_str()))
+                execute(
+                    "insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)",
+                    (profile_id, session["user_code"], note, now_str()),
+                )
             flash("Profile submitted for approval." if action == "submit" else "Profile saved.", "success")
             return redirect(url_for("profile_detail", profile_id=profile_id))
         except ValueError as e:
             flash(str(e), "error")
+
     return render_template("profile_form.html", profile=None, masters=_masters_bundle(), notes=[], prev_profile_id=None, next_profile_id=None)
 
 
@@ -701,7 +759,10 @@ def profile_detail(profile_id):
             save_profile(payload, profile_id=profile_id, action=action)
             note = request.form.get("notes", "").strip()
             if note:
-                execute("insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)", (profile_id, session["user_code"], note, now_str()))
+                execute(
+                    "insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)",
+                    (profile_id, session["user_code"], note, now_str()),
+                )
                 if session["role"] in ("manager", "tl") and profile["recruiter_code"] != session["user_code"]:
                     create_notification(profile["recruiter_code"], "Profile updated", f"{session['full_name']} updated notes for {profile['candidate_name']}.", "info")
             flash("Profile updated.", "success")
@@ -802,12 +863,14 @@ def submissions():
     tab = request.args.get("tab", "all")
     filters = []
     params = []
+
     if is_recruiter():
         filters.append("s.recruiter_code=?")
         params.append(session["user_code"])
     if tab != "all":
         filters.append("s.status=?")
         params.append(tab)
+
     sql = """
         select s.*, p.candidate_name, p.phone, p.process, p.workflow_status
         from submissions s
@@ -816,6 +879,7 @@ def submissions():
     if filters:
         sql += " where " + " and ".join(filters)
     sql += " order by s.id desc limit 120"
+
     rows = q_all(sql, params)
     return render_template("submissions.html", rows=rows, tab=tab)
 
@@ -855,6 +919,7 @@ def interviews():
     tab = request.args.get("tab", "today")
     filters = []
     params = []
+
     if is_recruiter():
         filters.append("i.recruiter_code=?")
         params.append(session["user_code"])
@@ -873,6 +938,7 @@ def interviews():
     if filters:
         sql += " where " + " and ".join(filters)
     sql += " order by i.interview_at asc"
+
     rows = q_all(sql, params)
     selectable = q_all("select id, candidate_name, recruiter_code from profiles order by id desc limit 100") if is_leader() else []
     return render_template("interviews.html", rows=rows, tab=tab, selectable=selectable)
@@ -917,6 +983,7 @@ def tasks():
     """
     filters = []
     params = []
+
     if is_recruiter():
         filters.append("t.assigned_to=?")
         params.append(session["user_code"])
@@ -924,9 +991,11 @@ def tasks():
         like = f"%{q}%"
         filters.append("(t.title like ? or t.details like ? or t.assigned_to like ? or u.full_name like ?)")
         params += [like, like, like, like]
+
     if filters:
         sql += " where " + " and ".join(filters)
     sql += " order by t.id desc limit 120"
+
     rows = q_all(sql, params)
     users = q_all("select user_code, full_name from users where is_active=1 and is_visible=1 order by full_name")
     return render_template("tasks.html", rows=rows, users=users, search=q)
@@ -973,7 +1042,12 @@ def attendance():
         "select * from attendance_breaks " + ("where user_code=? " if is_recruiter() else "") + " order by id desc limit 120",
         (session["user_code"],) if is_recruiter() else (),
     )
-    return render_template("attendance.html", metrics=metrics, rows=rows, users=q_all("select user_code, full_name from users where role='recruiter' order by full_name"))
+    return render_template(
+        "attendance.html",
+        metrics=metrics,
+        rows=rows,
+        users=q_all("select user_code, full_name from users where role='recruiter' order by full_name"),
+    )
 
 
 # ---------- reports ----------
@@ -986,9 +1060,15 @@ def reports():
             enabled = 1 if request.form.get("is_enabled") == "on" else 0
             existing = q_one("select id from report_settings where user_code=?", (session["user_code"],))
             if existing:
-                execute("update report_settings set every_minutes=?, is_enabled=?, updated_at=? where user_code=?", (every, enabled, now_str(), session["user_code"]))
+                execute(
+                    "update report_settings set every_minutes=?, is_enabled=?, updated_at=? where user_code=?",
+                    (every, enabled, now_str(), session["user_code"]),
+                )
             else:
-                execute("insert into report_settings (user_code, every_minutes, is_enabled, updated_at) values (?, ?, ?, ?)", (session["user_code"], every, enabled, now_str()))
+                execute(
+                    "insert into report_settings (user_code, every_minutes, is_enabled, updated_at) values (?, ?, ?, ?)",
+                    (session["user_code"], every, enabled, now_str()),
+                )
             flash("Report schedule saved. Manual generation is ready.", "success")
         else:
             target = request.form.get("target_user_code", "all")
@@ -1002,9 +1082,13 @@ def reports():
 
     role = session["role"]
     if is_recruiter():
-        rows = q_all("select * from reports where owner_user_code=? or target_user_code=? order by id desc limit 50", (session["user_code"], session["user_code"]))
+        rows = q_all(
+            "select * from reports where owner_user_code=? or target_user_code=? order by id desc limit 50",
+            (session["user_code"], session["user_code"]),
+        )
     else:
         rows = q_all("select * from reports order by id desc limit 120")
+
     settings = q_one("select * from report_settings where user_code=?", (session["user_code"],))
     users = q_all("select user_code, full_name from users where role='recruiter' order by full_name")
     return render_template("reports.html", rows=rows, settings=settings, users=users, role=role)
@@ -1024,6 +1108,7 @@ def export_report(report_id, fmt):
     payload = json_loads(row["report_json"])
     rows = payload.get("rows", [])
     file_base = REPORT_DIR / f"report_{report_id}_{fmt}"
+
     if fmt == "csv":
         path = str(file_base.with_suffix(".csv"))
         with open(path, "w", newline="", encoding="utf-8") as f:
@@ -1061,7 +1146,7 @@ def performance():
         "interview_actions": sum(r["interviews"] for r in rows),
         "billed_visibility": sum(r["billed_visibility"] for r in rows),
     }
-    ordered = sorted(rows, key=lambda x: x["score"], reverse=True)
+    ordered = sorted(rows, key=lambda x: x["score"], reverse=True) if rows else []
     alerts = []
     if ordered:
         low = ordered[-1]
@@ -1079,6 +1164,7 @@ def dialer():
     sql = "select * from profiles"
     params = []
     filters = []
+
     if is_recruiter():
         filters.append("recruiter_code=?")
         params.append(session["user_code"])
@@ -1086,9 +1172,11 @@ def dialer():
         like = f"%{q}%"
         filters.append("(candidate_name like ? or phone like ? or process like ? or recruiter_code like ?)")
         params += [like, like, like, like]
+
     if filters:
         sql += " where " + " and ".join(filters)
     sql += " order by id desc limit 100"
+
     rows = q_all(sql, params)
     return render_template("dialer.html", rows=rows, search=q)
 
@@ -1099,7 +1187,10 @@ def dialer():
 def search_users():
     q = request.args.get("q", "").strip()
     like = f"%{q}%"
-    rows = q_all("select user_code, full_name, role from users where user_code like ? or full_name like ? order by full_name limit 12", (like, like))
+    rows = q_all(
+        "select user_code, full_name, role from users where user_code like ? or full_name like ? order by full_name limit 12",
+        (like, like),
+    )
     return jsonify([dict(r) for r in rows])
 
 
@@ -1175,7 +1266,7 @@ def profile_quick_update(profile_id):
     return jsonify({
         "ok": True,
         "message": "Profile updated.",
-        "followup_at": followup_at if followup_at is not None else profile["next_followup_at"],
+        "followup_at": followup_at if followup_at is not None else profile.get("next_followup_at"),
     })
 
 
