@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block auth_content %}
+<div class="auth-wrap">
+  <div class="auth-card auth-card-clean">
+    <div class="auth-brand auth-brand-clean">
+      <div>
+        <div class="brand-kicker">Career Crox</div>
+        <h1>Work Access</h1>
+        <p>Secure access for recruitment operations.</p>
+      </div>
+      <img src="{{ url_for('static', filename='img/career-crox-logo.svg') }}" alt="Career Crox">
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-stack">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% endwith %}
+
+    <form method="post" class="grid form-grid single auth-form-clean">
+      <label>
+        <span>Access Code</span>
+        <input type="text" name="user_code" placeholder="Enter access code" autocomplete="username">
+      </label>
+      <div>
+        <label>
+          <span>Secure Passcode</span>
+          <div class="password-field">
+            <input id="loginPassword" type="password" name="password" placeholder="Enter passcode" autocomplete="current-password">
+            <button class="password-toggle" type="button" id="togglePasswordBtn">Show</button>
+          </div>
+        </label>
+        <label class="show-pass-check"><input type="checkbox" id="showPasswordCheck"> Show password</label>
+      </div>
+      <button class="btn btn-primary" type="submit">Continue</button>
+    </form>
+  </div>
+</div>
+<script>
+(function(){
+  const input = document.getElementById("loginPassword");
+  const btn = document.getElementById("togglePasswordBtn");
+  const check = document.getElementById("showPasswordCheck");
+  if(!input) return;
+  const sync = () => {
+    const show = input.type === "text";
+    if (btn) btn.textContent = show ? "Hide" : "Show";
+    if (check) check.checked = show;
+  };
+  if(btn) btn.addEventListener("click", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    sync();
+  });
+  if(check) check.addEventListener("change", () => {
+    input.type = check.checked ? "text" : "password";
+    sync();
+  });
+  sync();
+})();
+</script>
+{% endblock %}

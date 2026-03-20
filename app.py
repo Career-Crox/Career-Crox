@@ -1,0 +1,1306 @@
+import csv
+import os
+from datetime import datetime
+from functools import wraps
+from pathlib import Path
+from uuid import uuid4
+from urllib.parse import quote
+
+from flask import Flask, flash, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from werkzeug.utils import secure_filename
+
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+STATIC_DIR = BASE_DIR / "static"
+UPLOAD_DIR = STATIC_DIR / "uploads"
+REPORT_DIR = DATA_DIR / "reports"
+
+for folder in (DATA_DIR, STATIC_DIR, UPLOAD_DIR, REPORT_DIR):
+    folder.mkdir(parents=True, exist_ok=True)
+
+DATABASE_URL = (os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL") or "").strip()
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required. This build is Supabase/Postgres only.")
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "career-crox-supabase-secret")
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400
+ENABLE_FOLLOWUP_SCAN = os.environ.get("ENABLE_FOLLOWUP_SCAN", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# ---------- generic helpers ----------
+def now():
+    return datetime.now()
+
+
+def now_str():
+    return now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today_str():
+    return now().strftime("%Y-%m-%d")
+
+
+def normalize_datetime_local(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return ""
+
+
+def dt_to_input(value):
+    if not value:
+        return ""
+    value = value.replace(" ", "T")
+    return value[:16]
+
+
+def sqlize(sql: str) -> str:
+    return sql.replace("?", "%s")
+
+
+def get_db():
+    if "db" not in g:
+        g.db = psycopg2.connect(
+            DATABASE_URL,
+            cursor_factory=RealDictCursor,
+            connect_timeout=8,
+            application_name="career-crox-crm",
+        )
+    return g.db
+
+
+@app.teardown_appcontext
+def teardown_db(exc=None):
+    db = g.pop("db", None)
+    if db:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def q_all(sql, params=()):
+    with get_db().cursor() as cur:
+        cur.execute(sqlize(sql), params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def q_one(sql, params=()):
+    with get_db().cursor() as cur:
+        cur.execute(sqlize(sql), params)
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def execute(sql, params=()):
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute(sqlize(sql), params)
+    db.commit()
+    return True
+
+
+def execute_many(sql, rows):
+    db = get_db()
+    with db.cursor() as cur:
+        cur.executemany(sqlize(sql), rows)
+    db.commit()
+
+
+def insert_and_get_id(sql, params=()):
+    db = get_db()
+    sql = sqlize(sql)
+    with db.cursor() as cur:
+        cur.execute(sql + " returning id", params)
+        row = cur.fetchone()
+    db.commit()
+    return row["id"]
+
+
+def safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def create_notification(user_code, title, message, kind="info"):
+    execute(
+        """
+        insert into notifications (user_code, title, message, kind, is_read, created_at)
+        values (?, ?, ?, ?, 0, ?)
+        """,
+        (user_code, title, message, kind, now_str()),
+    )
+
+
+def recruiter_only_filter(table_alias=""):
+    prefix = f"{table_alias}." if table_alias else ""
+    if session.get("role") == "recruiter":
+        return f" where {prefix}recruiter_code=? ", [session.get("user_code")]
+    return "", []
+
+
+def session_identity():
+    code = session.get("user_code")
+    if not code:
+        return None
+    return {
+        "user_code": code,
+        "full_name": session.get("full_name", code),
+        "role": session.get("role", ""),
+    }
+
+
+def current_user(force_db=False):
+    if not force_db:
+        return session_identity()
+    if "current_user_cache" in g:
+        return g.current_user_cache
+    code = session.get("user_code")
+    if not code:
+        g.current_user_cache = None
+        return None
+    g.current_user_cache = q_one("select * from users where user_code=?", (code,))
+    return g.current_user_cache
+
+
+def login_required(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_code"):
+            return redirect(url_for("login"))
+        return fn(*args, **kwargs)
+    return wrapped
+
+
+def roles_required(*roles):
+    def deco(fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            if session.get("role") not in roles:
+                flash("Access denied.", "error")
+                return redirect(url_for("dashboard"))
+            return fn(*args, **kwargs)
+        return wrapped
+    return deco
+
+
+def is_recruiter():
+    return session.get("role") == "recruiter"
+
+
+def is_leader():
+    return session.get("role") in ("manager", "tl")
+
+
+# ---------- database ----------
+# Supabase/Postgres only build.
+# Run the SQL from 3_SUPABASE before deploying.
+
+# ---------- master options ----------
+def get_master_values(category, include_pending=False):
+    cache = g.setdefault("master_values_cache", {})
+    key = (category, include_pending)
+    if key in cache:
+        return cache[key]
+
+    sql = "select * from master_options where category=?"
+    params = [category]
+    if not include_pending:
+        sql += " and status='active'"
+    sql += " order by value"
+    rows = q_all(sql, params)
+    cache[key] = rows
+    return rows
+
+
+def maybe_add_master_option(category, new_value, created_by):
+    new_value = (new_value or "").strip()
+    if not new_value:
+        return None
+    existing = q_one(
+        "select * from master_options where lower(category)=lower(?) and lower(value)=lower(?)",
+        (category, new_value),
+    )
+    if existing:
+        return existing["value"]
+
+    status = "active" if session.get("role") in ("manager", "tl") else "pending"
+    execute(
+        """
+        insert into master_options (category, value, status, created_by, created_at)
+        values (?, ?, ?, ?, ?)
+        """,
+        (category, new_value, status, created_by, now_str()),
+    )
+    if status == "pending":
+        for code in [r["user_code"] for r in q_all("select user_code from users where role in ('manager','tl')")]:
+            create_notification(code, "Master option approval", f"New {category} option '{new_value}' needs approval.", "warning")
+    try:
+        g.pop("master_values_cache", None)
+    except Exception:
+        pass
+    return new_value
+
+
+# ---------- profile helpers ----------
+MANDATORY_INTERESTED_FIELDS = [
+    "qualification",
+    "location",
+    "preferred_location",
+    "degree",
+    "process",
+    "interview_availability",
+]
+
+
+def build_profile_payload(form, files=None):
+    user = session_identity()
+    if not user:
+        raise ValueError("Session expired. Please login again.")
+
+    recruiter_code = user["user_code"]
+    recruiter_name = user["full_name"]
+
+    payload = {
+        "recruiter_code": recruiter_code,
+        "recruiter_name": recruiter_name,
+        "candidate_name": form.get("candidate_name", "").strip(),
+        "phone": form.get("phone", "").strip(),
+        "email": form.get("email", "").strip(),
+        "qualification": form.get("qualification", "").strip(),
+        "location": form.get("location", "").strip(),
+        "preferred_location": form.get("preferred_location", "").strip(),
+        "degree": form.get("degree", "").strip(),
+        "process": form.get("process", "").strip(),
+        "total_experience": form.get("total_experience", "").strip(),
+        "relevant_experience": form.get("relevant_experience", "").strip(),
+        "inhand_monthly": form.get("inhand_monthly", "").strip(),
+        "ctc_monthly": form.get("ctc_monthly", "").strip(),
+        "career_gap": form.get("career_gap", "").strip(),
+        "call_connected": form.get("call_connected", "").strip(),
+        "job_interest": form.get("job_interest", "").strip(),
+        "interview_availability": form.get("interview_availability", "").strip(),
+        "notes": form.get("notes", "").strip(),
+        "submission_date": form.get("submission_date", today_str()).strip() or today_str(),
+    }
+
+    for key in ("location", "preferred_location", "career_gap"):
+        if payload.get(key) == "__add_new__":
+            payload[key] = ""
+
+    for category, field in [
+        ("location", "location"),
+        ("location", "preferred_location"),
+        ("process", "process"),
+        ("qualification", "qualification"),
+        ("degree", "degree"),
+        ("career_gap", "career_gap"),
+        ("interview_availability", "interview_availability"),
+    ]:
+        new_value = form.get(f"{field}_new", "").strip()
+        if new_value:
+            payload[field] = maybe_add_master_option(category, new_value, recruiter_code)
+
+    if payload["job_interest"] in ("Yes", "Interested", "yes", "interested"):
+        missing = []
+        if not payload["candidate_name"]:
+            missing.append("Candidate Name")
+        for key in MANDATORY_INTERESTED_FIELDS:
+            if not payload.get(key):
+                missing.append(key.replace("_", " ").title())
+        if missing:
+            raise ValueError("Interested profile में ये fields जरूरी हैं: " + ", ".join(missing))
+    else:
+        if not payload["candidate_name"]:
+            payload["candidate_name"] = "Untitled Lead"
+
+    rel_exp = safe_int(payload["relevant_experience"])
+    if rel_exp <= 0:
+        payload["relevant_experience_range"] = "0"
+    elif rel_exp <= 1:
+        payload["relevant_experience_range"] = "0-1 year"
+    elif rel_exp <= 3:
+        payload["relevant_experience_range"] = "1-3 years"
+    else:
+        payload["relevant_experience_range"] = "3+ years"
+
+    inhand = safe_int(payload["inhand_monthly"])
+    if inhand <= 0:
+        payload["relevant_inhand_range"] = "0"
+    elif inhand <= 15000:
+        payload["relevant_inhand_range"] = "Up to 15k"
+    elif inhand <= 25000:
+        payload["relevant_inhand_range"] = "15k-25k"
+    else:
+        payload["relevant_inhand_range"] = "25k+"
+
+    resume = request.files.get("resume_file")
+    recording = request.files.get("recording_file")
+    resume_name = ""
+    recording_name = ""
+
+    if resume and resume.filename:
+        resume_name = f"{uuid4().hex}_{secure_filename(resume.filename)}"
+        resume.save(UPLOAD_DIR / resume_name)
+    if recording and recording.filename:
+        recording_name = f"{uuid4().hex}_{secure_filename(recording.filename)}"
+        recording.save(UPLOAD_DIR / recording_name)
+
+    payload["resume_file"] = resume_name
+    payload["recording_file"] = recording_name
+    return payload
+
+
+def save_profile(payload, profile_id=None, action="save"):
+    draft_status = "saved"
+    workflow_status = "saved"
+
+    if action == "submit":
+        draft_status = "submitted"
+        workflow_status = "pending_approval"
+
+    cols = [
+        "recruiter_code", "recruiter_name", "candidate_name", "phone", "email", "qualification", "location",
+        "preferred_location", "degree", "process", "total_experience", "relevant_experience",
+        "inhand_monthly", "ctc_monthly", "career_gap", "call_connected", "job_interest",
+        "interview_availability", "notes", "submission_date", "resume_file", "recording_file",
+        "relevant_experience_range", "relevant_inhand_range"
+    ]
+
+    values = [payload.get(c, "") for c in cols]
+
+    if profile_id:
+        old = q_one("select * from profiles where id=?", (profile_id,))
+        if not old:
+            raise ValueError("Profile not found.")
+        if is_recruiter() and old["recruiter_code"] != session.get("user_code"):
+            raise ValueError("Access denied.")
+        keep_resume = old["resume_file"] if not payload["resume_file"] else payload["resume_file"]
+        keep_recording = old["recording_file"] if not payload["recording_file"] else payload["recording_file"]
+        update_values = [
+            payload["recruiter_code"], payload["recruiter_name"], payload["candidate_name"], payload["phone"], payload["email"],
+            payload["qualification"], payload["location"], payload["preferred_location"], payload["degree"], payload["process"],
+            payload["total_experience"], payload["relevant_experience"], payload["inhand_monthly"], payload["ctc_monthly"],
+            payload["career_gap"], payload["call_connected"], payload["job_interest"], payload["interview_availability"],
+            payload["notes"], payload.get("submission_date", ""), keep_resume, keep_recording,
+            payload["relevant_experience_range"], payload["relevant_inhand_range"], draft_status, now_str(), profile_id,
+        ]
+        execute(
+            """
+            update profiles set
+                recruiter_code=?, recruiter_name=?, candidate_name=?, phone=?, email=?, qualification=?, location=?,
+                preferred_location=?, degree=?, process=?, total_experience=?, relevant_experience=?,
+                inhand_monthly=?, ctc_monthly=?, career_gap=?, call_connected=?, job_interest=?,
+                interview_availability=?, notes=?, submission_date=?, resume_file=?, recording_file=?,
+                relevant_experience_range=?, relevant_inhand_range=?, draft_status=?, updated_at=?
+            where id=?
+            """,
+            update_values,
+        )
+        if action == "submit":
+            execute("update profiles set workflow_status='pending_approval' where id=?", (profile_id,))
+            _add_submission(profile_id, old["recruiter_code"], old["recruiter_name"], "pending_approval")
+        return profile_id
+
+    profile_id = insert_and_get_id(
+        f"""
+        insert into profiles (
+            recruiter_code, recruiter_name, candidate_name, phone, email, qualification, location,
+            preferred_location, degree, process, total_experience, relevant_experience,
+            inhand_monthly, ctc_monthly, career_gap, call_connected, job_interest,
+            interview_availability, notes, submission_date, resume_file, recording_file,
+            relevant_experience_range, relevant_inhand_range, draft_status, workflow_status,
+            created_at, updated_at
+        ) values ({','.join(['?'] * 28)})
+        """,
+        values + [draft_status, workflow_status, now_str(), now_str()],
+    )
+    if action == "submit":
+        _add_submission(profile_id, payload["recruiter_code"], payload["recruiter_name"], "pending_approval")
+    return profile_id
+
+
+def _add_submission(profile_id, recruiter_code, recruiter_name, status):
+    execute(
+        """
+        insert into submissions (profile_id, recruiter_code, recruiter_name, submitted_at, status)
+        values (?, ?, ?, ?, ?)
+        """,
+        (profile_id, recruiter_code, recruiter_name, now_str(), status),
+    )
+    leaders = q_all("select user_code from users where role in ('manager','tl')")
+    for row in leaders:
+        create_notification(row["user_code"], "Profile submitted for approval", f"{recruiter_name} submitted a profile for approval.", "warning")
+
+
+def can_access_profile(profile):
+    if not profile:
+        return False
+    return is_leader() or profile["recruiter_code"] == session.get("user_code")
+
+
+# ---------- reporting ----------
+def get_recruiter_rows():
+    return q_all("select * from users where role='recruiter' and is_active=1 order by full_name")
+
+
+def build_metrics_for_user(user_code):
+    user = q_one("select * from users where user_code=?", (user_code,))
+    if not user:
+        return None
+    profiles_total = q_one("select count(*) c from profiles where recruiter_code=?", (user_code,))["c"]
+    submissions_total = q_one("select count(*) c from submissions where recruiter_code=?", (user_code,))["c"]
+    approvals_pending = q_one("select count(*) c from profiles where recruiter_code=? and workflow_status='pending_approval'", (user_code,))["c"]
+    interviews_total = q_one("select count(*) c from interviews where recruiter_code=?", (user_code,))["c"]
+    calls_row = q_one("select coalesce(sum(total_calls),0) total_calls, coalesce(sum(connected_calls),0) connected_calls, coalesce(sum(talktime_minutes),0) talktime from call_logs where recruiter_code=?", (user_code,))
+    open_tasks = q_one("select count(*) c from tasks where assigned_to=? and status in ('open','pending')", (user_code,))["c"]
+    updates_logged = q_one("select count(*) c from profile_notes where added_by=?", (user_code,))["c"]
+    breaks_row = q_one("select coalesce(sum(break_count),0) c, coalesce(sum(break_minutes),0) m from attendance_breaks where user_code=?", (user_code,))
+    last_seen = q_one("select max(created_at) seen from call_logs where recruiter_code=?", (user_code,))["seen"] or q_one("select max(updated_at) seen from profiles where recruiter_code=?", (user_code,))["seen"]
+
+    score = submissions_total * 5 + interviews_total * 3 + calls_row["connected_calls"] * 2 + updates_logged
+    return {
+        "user_code": user_code,
+        "full_name": user["full_name"],
+        "designation": user["role"].title() if user["role"] != "tl" else "Team Lead",
+        "candidates": profiles_total,
+        "submissions": submissions_total,
+        "pending_approvals": approvals_pending,
+        "calls": calls_row["total_calls"],
+        "connected_calls": calls_row["connected_calls"],
+        "talktime": calls_row["talktime"],
+        "updates": updates_logged,
+        "interviews": interviews_total,
+        "open_tasks": open_tasks,
+        "break_count": breaks_row["c"],
+        "break_minutes": breaks_row["m"],
+        "last_seen": last_seen or "-",
+        "state": "Active" if user["is_active"] else "Inactive",
+        "score": score,
+        "billed_visibility": max(0, submissions_total * 1000),
+    }
+
+
+def team_metrics(filter_code=None):
+    if is_recruiter():
+        row = build_metrics_for_user(session.get("user_code"))
+        return [row] if row else []
+    codes = [r["user_code"] for r in q_all("select user_code from users where role in ('recruiter','tl') order by role desc, full_name")]
+    if filter_code and filter_code != "all":
+        codes = [c for c in codes if c == filter_code]
+    rows = []
+    for code in codes:
+        row = build_metrics_for_user(code)
+        if row:
+            rows.append(row)
+    return rows
+
+
+def get_dashboard_cards(user_code=None):
+    if user_code:
+        row = q_one(
+            """
+            select
+              (select count(*) from profiles where recruiter_code=%s and left(created_at, 10)=current_date::text) as profiles_today,
+              (select count(*) from profiles where recruiter_code=%s) as total_profiles,
+              (select count(*) from profiles where recruiter_code=%s and workflow_status='pending_approval') as pending_approvals,
+              (select count(*) from interviews where recruiter_code=%s and left(interview_at, 10)=current_date::text) as interviews_today,
+              (select count(*) from tasks where assigned_to=%s and status in ('open','pending')) as open_tasks,
+              (select count(*) from reports where owner_user_code=%s) as reports
+            """,
+            (user_code, user_code, user_code, user_code, user_code, user_code),
+        )
+    else:
+        row = q_one(
+            """
+            select
+              (select count(*) from profiles where left(created_at, 10)=current_date::text) as profiles_today,
+              (select count(*) from profiles) as total_profiles,
+              (select count(*) from profiles where workflow_status='pending_approval') as pending_approvals,
+              (select count(*) from interviews where left(interview_at, 10)=current_date::text) as interviews_today,
+              (select count(*) from tasks where status in ('open','pending')) as open_tasks,
+              (select count(*) from reports) as reports
+            """
+        )
+    return row or {
+        "profiles_today": 0,
+        "total_profiles": 0,
+        "pending_approvals": 0,
+        "interviews_today": 0,
+        "open_tasks": 0,
+        "reports": 0,
+    }
+
+
+def save_generated_report(owner_user_code, target_user_code="all", report_type="team"):
+    metrics = team_metrics(None if target_user_code == "all" else target_user_code)
+    report_date = today_str()
+    top_name = "N/A"
+    low_name = "N/A"
+    if metrics:
+        ordered = sorted(metrics, key=lambda x: x["score"], reverse=True)
+        top_name = ordered[0]["full_name"]
+        low_name = ordered[-1]["full_name"]
+
+    total_profiles = sum(m["candidates"] for m in metrics)
+    total_submissions = sum(m["submissions"] for m in metrics)
+    total_interviews = sum(m["interviews"] for m in metrics)
+    total_calls = sum(m["calls"] for m in metrics)
+
+    report_json = {
+        "rows": metrics,
+        "top": top_name,
+        "low": low_name,
+        "total_profiles": total_profiles,
+        "total_submissions": total_submissions,
+        "total_interviews": total_interviews,
+        "total_calls": total_calls,
+    }
+    execute(
+        """
+        insert into reports (
+            owner_user_code, target_user_code, report_date, report_type, total_profiles,
+            total_submissions, total_interviews, total_calls, top_performer, low_performer,
+            report_json, created_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            owner_user_code, target_user_code, report_date, report_type, total_profiles,
+            total_submissions, total_interviews, total_calls, top_name, low_name,
+            json_dumps(report_json), now_str()
+        ),
+    )
+    create_notification(owner_user_code, "Report generated", f"{report_type.title()} report for {report_date} is ready.", "success")
+
+
+def json_dumps(data):
+    import json
+    return json.dumps(data, ensure_ascii=False)
+
+
+def json_loads(data):
+    import json
+    try:
+        return json.loads(data or "{}")
+    except Exception:
+        return {}
+
+
+def ensure_due_followup_notifications():
+    due_rows = q_all(
+        """
+        select id, candidate_name, recruiter_code, next_followup_at
+        from profiles
+        where coalesce(next_followup_at, '') != ''
+          and coalesce(followup_notified_at, '') = ''
+          and next_followup_at <= to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+        order by next_followup_at asc
+        limit 10
+        """
+    )
+    for row in due_rows:
+        create_notification(
+            row["recruiter_code"],
+            "Follow-up due",
+            f"{row['candidate_name']} follow-up is due now.",
+            "warning",
+        )
+        execute(
+            "update profiles set followup_notified_at=?, updated_at=? where id=?",
+            (now_str(), now_str(), row["id"]),
+        )
+
+
+def should_run_followup_scan():
+    if not ENABLE_FOLLOWUP_SCAN:
+        return False
+    last = session.get("_last_followup_scan_at", "")
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except Exception:
+        return True
+    return (now() - last_dt).total_seconds() >= 1800
+
+
+# ---------- context ----------
+@app.context_processor
+def inject_globals():
+    user = session_identity()
+    unread = session.get("_unread_notifications", 0)
+    if user and request.endpoint in {"dashboard", "notifications"}:
+        unread_row = q_one("select count(*) c from notifications where user_code=? and is_read=0", (user["user_code"],))
+        unread = unread_row["c"] if unread_row else 0
+        session["_unread_notifications"] = unread
+    return {
+        "me": user,
+        "today": today_str(),
+        "unread_notifications": unread,
+        "current_path": request.path,
+    }
+
+
+@app.before_request
+def hydrate_followup_notifications():
+    if request.endpoint == "static":
+        return
+    if not session.get("user_code"):
+        return
+    if request.endpoint != "notifications":
+        return
+    if should_run_followup_scan():
+        ensure_due_followup_notifications()
+        session["_last_followup_scan_at"] = now().isoformat(timespec="seconds")
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return redirect(url_for("static", filename="img/career-crox-icon.svg"))
+
+
+@app.route("/health")
+def health():
+    q_one("select 1 as ok")
+    return {"ok": True, "backend": "postgres"}
+
+
+# ---------- auth ----------
+@app.route("/", methods=["GET", "POST"])
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user_code"):
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        code = request.form.get("user_code", "").strip().upper()
+        password = request.form.get("password", "").strip()
+        app.logger.info("LOGIN ATTEMPT backend=postgres user=%s", code)
+        user = q_one(
+            "select * from users where user_code=? and password=? and is_active=1",
+            (code, password),
+        )
+        if not user:
+            app.logger.warning("LOGIN FAILED user=%s", code)
+            flash("Invalid login details.", "error")
+            return render_template("login.html")
+        app.logger.info("LOGIN SUCCESS user=%s role=%s", user["user_code"], user["role"])
+        session["user_code"] = user["user_code"]
+        session["full_name"] = user["full_name"]
+        session["role"] = user["role"]
+        session["_last_followup_scan_at"] = ""
+        session["_unread_notifications"] = 0
+        return redirect(url_for("dashboard"))
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# ---------- dashboard ----------
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    user = session_identity()
+    if not user:
+        session.clear()
+        flash("Session expired. Please login again.", "error")
+        return redirect(url_for("login"))
+
+    user_code = user["user_code"]
+    if is_recruiter():
+        where = " where recruiter_code=? "
+        params = [user_code]
+        cards = get_dashboard_cards(user_code)
+    else:
+        where = ""
+        params = []
+        cards = get_dashboard_cards()
+
+    recent_profiles = q_all(
+        "select id, candidate_name, recruiter_code, process, workflow_status from profiles " + where + " order by id desc limit 3",
+        params,
+    )
+    recent_submissions = q_all(
+        "select id, profile_id, recruiter_code, submitted_at, status from submissions " + (" where recruiter_code=? " if is_recruiter() else "") + " order by id desc limit 3",
+        (user_code,) if is_recruiter() else (),
+    )
+    notifications = q_all(
+        "select id, title, message, created_at from notifications where user_code=? order by id desc limit 3",
+        (user_code,),
+    )
+    perf_rows = []
+    return render_template("dashboard.html", cards=cards, recent_profiles=recent_profiles, recent_submissions=recent_submissions, notifications=notifications, perf_rows=perf_rows)
+
+
+# ---------- profiles ----------
+@app.route("/profiles")
+@login_required
+def profiles():
+    q = request.args.get("q", "").strip()
+    filters = []
+    params = []
+    if is_recruiter():
+        filters.append("recruiter_code=?")
+        params.append(session["user_code"])
+
+    if q:
+        like = f"%{q}%"
+        filters.append("(candidate_name like ? or recruiter_code like ? or phone like ? or email like ? or process like ? or cast(id as text) like ?)")
+        params += [like, like, like, like, like, like]
+
+    sql = "select id, candidate_name, recruiter_code, email, phone, process, workflow_status, next_followup_at, call_connected, job_interest, interview_availability from profiles"
+    if filters:
+        sql += " where " + " and ".join(filters)
+    sql += " order by id desc limit 60"
+    rows = q_all(sql, params)
+    return render_template("profiles.html", rows=rows, search=q, masters=_masters_bundle())
+
+
+@app.route("/profile/new", methods=["GET", "POST"])
+@login_required
+def profile_new():
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+        try:
+            payload = build_profile_payload(request.form)
+            profile_id = save_profile(payload, action=action)
+            note = payload.get("notes", "").strip()
+            if note:
+                execute("insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)", (profile_id, session["user_code"], note, now_str()))
+            flash("Profile submitted for approval." if action == "submit" else "Profile saved.", "success")
+            return redirect(url_for("profile_detail", profile_id=profile_id))
+        except ValueError as e:
+            flash(str(e), "error")
+    return render_template("profile_form.html", profile=None, masters=_masters_bundle(), notes=[], prev_profile_id=None, next_profile_id=None)
+
+
+@app.route("/profile/<int:profile_id>", methods=["GET", "POST"])
+@login_required
+def profile_detail(profile_id):
+    profile = q_one("select * from profiles where id=?", (profile_id,))
+    if not can_access_profile(profile):
+        flash("Access denied.", "error")
+        return redirect(url_for("profiles"))
+
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+        try:
+            payload = build_profile_payload(request.form)
+            save_profile(payload, profile_id=profile_id, action=action)
+            note = request.form.get("notes", "").strip()
+            if note:
+                execute("insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)", (profile_id, session["user_code"], note, now_str()))
+                if session["role"] in ("manager", "tl") and profile["recruiter_code"] != session["user_code"]:
+                    create_notification(profile["recruiter_code"], "Profile updated", f"{session['full_name']} updated notes for {profile['candidate_name']}.", "info")
+            flash("Profile updated.", "success")
+            return redirect(url_for("profile_detail", profile_id=profile_id))
+        except ValueError as e:
+            flash(str(e), "error")
+
+    notes = q_all(
+        """
+        select pn.*, coalesce(u.full_name, pn.added_by) as added_by_name
+        from profile_notes pn
+        left join users u on u.user_code = pn.added_by
+        where pn.profile_id=?
+        order by pn.id desc
+        """,
+        (profile_id,),
+    )
+
+    if is_recruiter():
+        prev_row = q_one(
+            "select id from profiles where recruiter_code=? and id<? order by id desc limit 1",
+            (session["user_code"], profile_id),
+        )
+        next_row = q_one(
+            "select id from profiles where recruiter_code=? and id>? order by id asc limit 1",
+            (session["user_code"], profile_id),
+        )
+    else:
+        prev_row = q_one("select id from profiles where id<? order by id desc limit 1", (profile_id,))
+        next_row = q_one("select id from profiles where id>? order by id asc limit 1", (profile_id,))
+
+    return render_template(
+        "profile_form.html",
+        profile=profile,
+        masters=_masters_bundle(),
+        notes=notes,
+        prev_profile_id=prev_row["id"] if prev_row else None,
+        next_profile_id=next_row["id"] if next_row else None,
+    )
+
+
+@app.route("/approve-profile/<int:profile_id>/<decision>")
+@login_required
+@roles_required("manager", "tl")
+def approve_profile(profile_id, decision):
+    profile = q_one("select * from profiles where id=?", (profile_id,))
+    if not profile:
+        flash("Profile not found.", "error")
+        return redirect(url_for("approvals"))
+    if decision not in ("approved", "rejected", "rescheduled"):
+        flash("Invalid action.", "error")
+        return redirect(url_for("approvals"))
+
+    execute("update profiles set workflow_status=?, updated_at=? where id=?", (decision, now_str(), profile_id))
+    execute("update submissions set status=? where id=(select id from submissions where profile_id=? order by id desc limit 1)", (decision, profile_id))
+    create_notification(profile["recruiter_code"], "Approval update", f"{profile['candidate_name']} profile {decision}.", "success" if decision == "approved" else "warning")
+    flash(f"Profile {decision}.", "success")
+    return redirect(url_for("approvals"))
+
+
+@app.route("/approvals")
+@login_required
+@roles_required("manager", "tl")
+def approvals():
+    pending_profiles = q_all("select * from profiles where workflow_status='pending_approval' order by id desc")
+    pending_masters = q_all("select * from master_options where status='pending' order by id desc")
+    return render_template("approvals.html", pending_profiles=pending_profiles, pending_masters=pending_masters)
+
+
+@app.route("/approve-master/<int:master_id>/<decision>")
+@login_required
+@roles_required("manager", "tl")
+def approve_master(master_id, decision):
+    new_status = "active" if decision == "approve" else "rejected"
+    row = q_one("select * from master_options where id=?", (master_id,))
+    if row:
+        execute("update master_options set status=? where id=?", (new_status, master_id))
+        create_notification(row["created_by"], "Master option update", f"{row['category']} option '{row['value']}' {new_status}.", "info")
+        g.pop("master_values_cache", None)
+    return redirect(url_for("approvals"))
+
+
+def _masters_bundle():
+    return {
+        "locations": get_master_values("location"),
+        "qualifications": get_master_values("qualification"),
+        "degrees": get_master_values("degree"),
+        "processes": get_master_values("process"),
+        "career_gaps": get_master_values("career_gap"),
+        "interview_availability": get_master_values("interview_availability"),
+        "call_connected": get_master_values("call_connected"),
+    }
+
+
+# ---------- submissions ----------
+@app.route("/submissions")
+@login_required
+def submissions():
+    tab = request.args.get("tab", "all")
+    filters = []
+    params = []
+    if is_recruiter():
+        filters.append("s.recruiter_code=?")
+        params.append(session["user_code"])
+    if tab != "all":
+        filters.append("s.status=?")
+        params.append(tab)
+    sql = """
+        select s.*, p.candidate_name, p.phone, p.process, p.workflow_status
+        from submissions s
+        join profiles p on p.id=s.profile_id
+    """
+    if filters:
+        sql += " where " + " and ".join(filters)
+    sql += " order by s.id desc limit 80"
+    rows = q_all(sql, params)
+    return render_template("submissions.html", rows=rows, tab=tab)
+
+
+# ---------- interviews ----------
+@app.route("/interviews", methods=["GET", "POST"])
+@login_required
+def interviews():
+    if request.method == "POST" and is_leader():
+        profile_id = safe_int(request.form.get("profile_id"))
+        profile = q_one("select * from profiles where id=?", (profile_id,))
+        if profile:
+            when = request.form.get("interview_at", "").replace("T", " ")
+            if len(when) == 16:
+                when += ":00"
+            execute(
+                """
+                insert into interviews (profile_id, recruiter_code, recruiter_name, candidate_name, interview_at, stage, status, location, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    profile_id,
+                    profile["recruiter_code"],
+                    profile["recruiter_name"],
+                    profile["candidate_name"],
+                    when,
+                    request.form.get("stage", "HR Round"),
+                    "scheduled",
+                    request.form.get("location", ""),
+                    now_str(),
+                ),
+            )
+            create_notification(profile["recruiter_code"], "Interview scheduled", f"{profile['candidate_name']} interview scheduled on {when}.", "success")
+            flash("Interview scheduled.", "success")
+        return redirect(url_for("interviews"))
+
+    tab = request.args.get("tab", "today")
+    filters = []
+    params = []
+    if is_recruiter():
+        filters.append("i.recruiter_code=?")
+        params.append(session["user_code"])
+    if tab == "today":
+        filters.append("left(i.interview_at, 10)=current_date::text")
+    elif tab == "upcoming":
+        filters.append("left(i.interview_at, 10)>current_date::text")
+    elif tab == "due":
+        filters.append("left(i.interview_at, 10)<current_date::text and i.status!='completed'")
+
+    sql = """
+        select i.*, p.phone, p.process, p.id as profile_id
+        from interviews i
+        join profiles p on p.id=i.profile_id
+    """
+    if filters:
+        sql += " where " + " and ".join(filters)
+    sql += " order by i.interview_at asc limit 80"
+    rows = q_all(sql, params)
+    selectable = q_all("select id, candidate_name, recruiter_code from profiles order by id desc limit 60") if is_leader() else []
+    return render_template("interviews.html", rows=rows, tab=tab, selectable=selectable)
+
+
+# ---------- tasks ----------
+@app.route("/tasks", methods=["GET", "POST"])
+@login_required
+def tasks():
+    if request.method == "POST":
+        target_code = request.form.get("assigned_to", "").strip().upper()
+        user = q_one("select * from users where user_code=?", (target_code,))
+        if user:
+            execute(
+                """
+                insert into tasks (assigned_to, assigned_by, title, details, status, created_at)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_code,
+                    session["user_code"],
+                    request.form.get("title", "").strip(),
+                    request.form.get("details", "").strip(),
+                    request.form.get("status", "open"),
+                    now_str(),
+                ),
+            )
+            create_notification(target_code, "New task assigned", request.form.get("title", "Task assigned"), "info")
+            flash("Task assigned.", "success")
+        else:
+            flash("Employee not found.", "error")
+        return redirect(url_for("tasks"))
+
+    q = request.args.get("q", "").strip()
+    sql = """
+        select t.id, t.assigned_to, t.assigned_by, t.title, t.details, t.status, t.created_at,
+               u.full_name as target_name,
+               a.full_name as assigned_by_name
+        from tasks t
+        left join users u on u.user_code=t.assigned_to
+        left join users a on a.user_code=t.assigned_by
+    """
+    filters = []
+    params = []
+    if is_recruiter():
+        filters.append("t.assigned_to=?")
+        params.append(session["user_code"])
+    if q:
+        like = f"%{q}%"
+        filters.append("(t.title like ? or t.details like ? or t.assigned_to like ? or u.full_name like ?)")
+        params += [like, like, like, like]
+    if filters:
+        sql += " where " + " and ".join(filters)
+    sql += " order by t.id desc limit 80"
+    rows = q_all(sql, params)
+    users = q_all("select user_code, full_name from users where is_active=1 and is_visible=1 order by full_name")
+    return render_template("tasks.html", rows=rows, users=users, search=q)
+
+
+# ---------- notifications ----------
+@app.route("/notifications")
+@login_required
+def notifications():
+    rows = q_all("select id, title, message, kind, is_read, created_at from notifications where user_code=? order by id desc limit 60", (session["user_code"],))
+    execute("update notifications set is_read=1 where user_code=?", (session["user_code"],))
+    session["_unread_notifications"] = 0
+    return render_template("notifications.html", rows=rows)
+
+
+# ---------- attendance ----------
+@app.route("/attendance", methods=["GET", "POST"])
+@login_required
+def attendance():
+    if request.method == "POST":
+        code = session["user_code"] if is_recruiter() else request.form.get("user_code", session["user_code"])
+        name_row = q_one("select full_name from users where user_code=?", (code,))
+        if name_row:
+            execute(
+                """
+                insert into attendance_breaks (user_code, user_name, attendance_date, break_type, break_time, break_count, break_minutes, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    code,
+                    name_row["full_name"],
+                    request.form.get("attendance_date", today_str()),
+                    request.form.get("break_type", "Break"),
+                    request.form.get("break_time", ""),
+                    safe_int(request.form.get("break_count", 1)),
+                    safe_int(request.form.get("break_minutes", 0)),
+                    now_str(),
+                ),
+            )
+            flash("Break entry saved.", "success")
+        return redirect(url_for("attendance"))
+
+    metrics = team_metrics(None if not is_recruiter() else session["user_code"])
+    rows = q_all(
+        "select * from attendance_breaks " + ("where user_code=? " if is_recruiter() else "") + " order by id desc limit 80",
+        (session["user_code"],) if is_recruiter() else (),
+    )
+    return render_template("attendance.html", metrics=metrics, rows=rows, users=q_all("select user_code, full_name from users where role='recruiter' order by full_name"))
+
+
+# ---------- reports ----------
+@app.route("/reports", methods=["GET", "POST"])
+@login_required
+def reports():
+    if request.method == "POST":
+        if request.form.get("form_type") == "schedule":
+            every = safe_int(request.form.get("every_minutes", 30), 30)
+            enabled = 1 if request.form.get("is_enabled") == "on" else 0
+            existing = q_one("select id from report_settings where user_code=?", (session["user_code"],))
+            if existing:
+                execute("update report_settings set every_minutes=?, is_enabled=?, updated_at=? where user_code=?", (every, enabled, now_str(), session["user_code"]))
+            else:
+                execute("insert into report_settings (user_code, every_minutes, is_enabled, updated_at) values (?, ?, ?, ?)", (session["user_code"], every, enabled, now_str()))
+            flash("Report schedule saved. Manual generation is ready.", "success")
+        else:
+            target = request.form.get("target_user_code", "all")
+            report_type = request.form.get("report_type", "team")
+            if is_recruiter():
+                target = session["user_code"]
+                report_type = "personal"
+            save_generated_report(session["user_code"], target, report_type)
+            flash("Report generated.", "success")
+        return redirect(url_for("reports"))
+
+    role = session["role"]
+    if is_recruiter():
+        rows = q_all("select * from reports where owner_user_code=? or target_user_code=? order by id desc limit 50", (session["user_code"], session["user_code"]))
+    else:
+        rows = q_all("select * from reports order by id desc limit 80")
+    settings = q_one("select * from report_settings where user_code=?", (session["user_code"],))
+    users = q_all("select user_code, full_name from users where role='recruiter' order by full_name")
+    return render_template("reports.html", rows=rows, settings=settings, users=users, role=role)
+
+
+@app.route("/report/export/<int:report_id>/<fmt>")
+@login_required
+def export_report(report_id, fmt):
+    row = q_one("select * from reports where id=?", (report_id,))
+    if not row:
+        flash("Report not found.", "error")
+        return redirect(url_for("reports"))
+    if is_recruiter() and row["owner_user_code"] != session["user_code"] and row["target_user_code"] != session["user_code"]:
+        flash("Access denied.", "error")
+        return redirect(url_for("reports"))
+
+    payload = json_loads(row["report_json"])
+    rows = payload.get("rows", [])
+    file_base = REPORT_DIR / f"report_{report_id}_{fmt}"
+    if fmt == "csv":
+        path = str(file_base.with_suffix(".csv"))
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Name", "Code", "Candidates", "Open Tasks", "Calls", "Updates", "Interviews", "Last Seen", "State", "Billed Visibility"])
+            for item in rows:
+                writer.writerow([item["full_name"], item["user_code"], item["candidates"], item["open_tasks"], item["calls"], item["updates"], item["interviews"], item["last_seen"], item["state"], item["billed_visibility"]])
+        return send_file(path, as_attachment=True)
+
+    if fmt == "excel":
+        from openpyxl import Workbook
+        path = str(file_base.with_suffix(".xlsx"))
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Report"
+        ws.append(["Name", "Code", "Candidates", "Open Tasks", "Calls", "Updates", "Interviews", "Last Seen", "State", "Billed Visibility"])
+        for item in rows:
+            ws.append([item["full_name"], item["user_code"], item["candidates"], item["open_tasks"], item["calls"], item["updates"], item["interviews"], item["last_seen"], item["state"], item["billed_visibility"]])
+        wb.save(path)
+        return send_file(path, as_attachment=True)
+
+    flash("Unknown export format.", "error")
+    return redirect(url_for("reports"))
+
+
+# ---------- performance ----------
+@app.route("/performance")
+@login_required
+def performance():
+    filter_code = request.args.get("user_code", "all")
+    rows = team_metrics(None if filter_code == "all" else filter_code)
+    summary = {
+        "calls_logged": sum(r["calls"] for r in rows),
+        "updates_logged": sum(r["updates"] for r in rows),
+        "interview_actions": sum(r["interviews"] for r in rows),
+        "billed_visibility": sum(r["billed_visibility"] for r in rows),
+    }
+    ordered = sorted(rows, key=lambda x: x["score"], reverse=True)
+    alerts = []
+    if ordered:
+        low = ordered[-1]
+        if low["score"] <= 4:
+            alerts.append(f"{low['full_name']} needs attention. Current score is low.")
+    users = q_all("select user_code, full_name, role from users where role in ('recruiter','tl') order by role desc, full_name")
+    return render_template("performance.html", rows=rows, summary=summary, alerts=alerts, users=users, selected_code=filter_code)
+
+
+# ---------- dialer ----------
+@app.route("/dialer")
+@login_required
+def dialer():
+    q = request.args.get("q", "").strip()
+    sql = "select id, candidate_name, recruiter_code, phone, process, call_connected, job_interest, interview_availability, next_followup_at from profiles"
+    params = []
+    filters = []
+    if is_recruiter():
+        filters.append("recruiter_code=?")
+        params.append(session["user_code"])
+    if q:
+        like = f"%{q}%"
+        filters.append("(candidate_name like ? or phone like ? or process like ? or recruiter_code like ?)")
+        params += [like, like, like, like]
+    if filters:
+        sql += " where " + " and ".join(filters)
+    sql += " order by id desc limit 60"
+    rows = q_all(sql, params)
+    return render_template("dialer.html", rows=rows, search=q)
+
+
+# ---------- APIs ----------
+@app.route("/api/search-users")
+@login_required
+def search_users():
+    q = request.args.get("q", "").strip()
+    like = f"%{q}%"
+    rows = q_all("select user_code, full_name, role from users where user_code like ? or full_name like ? order by full_name limit 8", (like, like))
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/profile/<int:profile_id>/quick-update", methods=["POST"])
+@login_required
+def profile_quick_update(profile_id):
+    profile = q_one("select * from profiles where id=?", (profile_id,))
+    if not can_access_profile(profile):
+        return jsonify({"ok": False, "message": "Access denied."}), 403
+
+    data = request.get_json(silent=True) or {}
+    updates = []
+    params = []
+
+    valid_call = {row["value"] for row in get_master_values("call_connected")}
+    valid_interview = {row["value"] for row in get_master_values("interview_availability")}
+
+    call_connected = (data.get("call_connected") or "").strip()
+    job_interest = (data.get("job_interest") or "").strip()
+    interview_availability = (data.get("interview_availability") or "").strip()
+    note_text = (data.get("note_text") or "").strip()
+    followup_at = normalize_datetime_local(data.get("followup_at", "")) if "followup_at" in data else None
+
+    if call_connected:
+        if call_connected not in valid_call:
+            return jsonify({"ok": False, "message": "Invalid call status."}), 400
+        updates.append("call_connected=?")
+        params.append(call_connected)
+
+    if job_interest:
+        if job_interest not in {"Yes", "No"}:
+            return jsonify({"ok": False, "message": "Invalid interest value."}), 400
+        updates.append("job_interest=?")
+        params.append(job_interest)
+
+    if interview_availability:
+        if interview_availability not in valid_interview:
+            return jsonify({"ok": False, "message": "Invalid interview option."}), 400
+        updates.append("interview_availability=?")
+        params.append(interview_availability)
+
+    if note_text:
+        combined_note = note_text
+        if (profile["notes"] or "").strip():
+            combined_note = f"{profile['notes'].rstrip()}\n{note_text}"
+        updates.append("notes=?")
+        params.append(combined_note)
+        execute(
+            "insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)",
+            (profile_id, session["user_code"], note_text, now_str()),
+        )
+
+    if followup_at is not None:
+        if not followup_at:
+            return jsonify({"ok": False, "message": "Invalid follow-up date and time."}), 400
+        updates.append("next_followup_at=?")
+        params.append(followup_at)
+        updates.append("followup_notified_at=?")
+        params.append("")
+        execute(
+            "insert into profile_notes (profile_id, added_by, note_text, created_at) values (?,?,?,?)",
+            (profile_id, session["user_code"], f"Follow-up set for {followup_at}", now_str()),
+        )
+
+    if not updates:
+        return jsonify({"ok": False, "message": "No update received."}), 400
+
+    execute(
+        f"update profiles set {', '.join(updates)}, updated_at=? where id=?",
+        params + [now_str(), profile_id],
+    )
+
+    return jsonify({
+        "ok": True,
+        "message": "Profile updated.",
+        "followup_at": followup_at if followup_at is not None else profile["next_followup_at"],
+    })
+
+
+@app.route("/call/<phone>")
+@login_required
+def call_link(phone):
+    cleaned = "".join(ch for ch in phone if ch.isdigit())
+    return redirect(f"tel:+91{cleaned}")
+
+
+@app.route("/whatsapp/<phone>/<candidate_name>")
+@login_required
+def whatsapp_link(phone, candidate_name):
+    cleaned = "".join(ch for ch in phone if ch.isdigit())
+    if cleaned.startswith("91") and len(cleaned) > 10:
+        cleaned = cleaned[-10:]
+    msg = quote(f"Hello {candidate_name}, this is Career Crox regarding your profile.")
+    return redirect(f"https://wa.me/91{cleaned}?text={msg}")
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5000)

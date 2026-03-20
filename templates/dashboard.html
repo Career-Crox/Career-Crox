@@ -1,0 +1,103 @@
+
+{% extends "base.html" %}
+{% set title = "Dashboard" %}
+{% set heading = "Dashboard" %}
+{% set subtitle = "Overview of candidate flow, tasks, approvals, and team updates." %}
+{% block content %}
+<div class="hero">
+  <div class="hero-copy">
+    <div class="hero-kicker">Career Crox CRM</div>
+    <h2>Recruitment operations dashboard</h2>
+    <p>Track profiles, approvals, interviews, tasks, and team performance from one workspace.</p>
+  </div>
+</div>
+
+<div class="card-grid four">
+  <div class="stat-card"><span>Profiles Today</span><strong>{{ cards.profiles_today }}</strong></div>
+  <div class="stat-card"><span>Total Profiles</span><strong>{{ cards.total_profiles }}</strong></div>
+  <div class="stat-card"><span>Pending Approvals</span><strong>{{ cards.pending_approvals }}</strong></div>
+  <div class="stat-card"><span>Interviews Today</span><strong>{{ cards.interviews_today }}</strong></div>
+  <div class="stat-card"><span>Open Tasks</span><strong>{{ cards.open_tasks }}</strong></div>
+  <div class="stat-card"><span>Reports</span><strong>{{ cards.reports }}</strong></div>
+</div>
+
+<div class="two-col">
+  <section class="panel">
+    <div class="panel-head">
+      <h3>Quick Actions</h3>
+    </div>
+    <div class="quick-grid">
+      <a class="quick-action qa1" href="{{ url_for('profile_new') }}">Add Profile</a>
+      <a class="quick-action qa2" href="{{ url_for('submissions') }}">Submission</a>
+      <a class="quick-action qa3" href="{{ url_for('interviews') }}">Interview</a>
+      <a class="quick-action qa4" href="{{ url_for('performance') }}">Performance</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Latest Notifications</h3></div>
+    <div class="list-stack">
+      {% for item in notifications %}
+      <div class="mini-item">
+        <div class="mini-title">{{ item.title }}</div>
+        <div class="mini-meta">{{ item.created_at }}</div>
+        <div class="mini-body">{{ item.message }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No notifications yet.</div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<div class="two-col">
+  <section class="panel">
+    <div class="panel-head"><h3>Recent Profiles</h3><a class="btn btn-light" href="{{ url_for('profiles') }}">Open</a></div>
+    <div class="table-wrap">
+      <table class="data-table compact">
+        <thead><tr><th>Name</th><th>Recruiter</th><th>Process</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for row in recent_profiles %}
+          <tr class="row-link" data-href="{{ url_for('profile_detail', profile_id=row.id) }}">
+            <td>{{ row.candidate_name }}</td>
+            <td>{{ row.recruiter_code }}</td>
+            <td>{{ row.process or "-" }}</td>
+            <td><span class="status {{ row.workflow_status }}">{{ row.workflow_status }}</span></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">No profiles.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h3>Recent Submission Flow</h3><a class="btn btn-light" href="{{ url_for('submissions') }}">Open</a></div>
+    <div class="table-wrap">
+      <table class="data-table compact">
+        <thead><tr><th>Profile ID</th><th>Recruiter</th><th>Time</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for row in recent_submissions %}
+          <tr>
+            <td>#{{ row.profile_id }}</td>
+            <td>{{ row.recruiter_code }}</td>
+            <td>{{ row.submitted_at }}</td>
+            <td><span class="status {{ row.status }}">{{ row.status }}</span></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">No submissions.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h3>Performance Center</h3><a class="btn btn-light" href="{{ url_for('performance') }}">Open</a></div>
+  <div class="empty">
+    Dashboard ko fast rakhne ke liye detailed performance table yahan se hata di gayi hai. Full details Performance Center me milengi.
+  </div>
+</section>
+{% endblock %}

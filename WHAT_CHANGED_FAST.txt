@@ -1,0 +1,7 @@
+This build is lighter for speed:
+- dashboard card counts merged into one query
+- session-based lightweight user identity used on most pages
+- unread notification count cached in session and refreshed only on dashboard/notifications
+- follow-up scan disabled by default (set ENABLE_FOLLOWUP_SCAN=true only if needed)
+- profiles, dialer, notifications, submissions, tasks, interviews fetch fewer columns and fewer rows
+- unused heavy PNG asset removed
