@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% set title = "Candidates" %}
+{% set heading = "Candidates" %}
+{% set subtitle = "Live candidate pipeline with smart batch dialer." %}
+{% block content %}
+<section class="panel candidates-panel" data-dialer-page>
+  <div class="panel-head panel-head-tight">
+    <div>
+      <h3>Candidate List</h3>
+      <div class="sub-caption">Compact actions, faster reads, cleaner flow.</div>
+    </div>
+    <div class="head-actions head-actions-wide">
+      <form class="inline-form" method="get">
+        <input type="text" name="q" value="{{ search }}" placeholder="Search name, recruiter, phone, process">
+        <button class="btn btn-light" type="submit">Search</button>
+      </form>
+      <div class="batch-actions">
+        <button class="btn btn-light js-toggle-select" type="button">Select All</button>
+        <button class="btn btn-dark js-start-dialer" type="button">Start Dialer</button>
+      </div>
+      <a class="btn btn-primary btn-sm btn-add-profile-top" href="{{ url_for('profile_new') }}">Add Profile</a>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table data-table-candidates">
+      <thead>
+        <tr>
+          <th><input type="checkbox" class="select-all"></th>
+          <th>Candidate</th>
+          <th>Recruiter</th>
+          <th>Phone</th>
+          <th>Process</th>
+          <th>Status</th>
+          <th>Follow Up</th>
+          <th class="sticky-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="dialer-source-row row-link"
+            data-href="{{ url_for('profile_detail', profile_id=row.id) }}"
+            data-profile-id="{{ row.id }}"
+            data-profile-url="{{ url_for('profile_detail', profile_id=row.id) }}"
+            data-candidate-name="{{ row.candidate_name }}"
+            data-phone="{{ row.phone or '' }}"
+            data-recruiter="{{ row.recruiter_code }}"
+            data-process="{{ row.process or '' }}"
+            data-whatsapp-url="{{ url_for('whatsapp_link', phone=row.phone or '0', candidate_name=row.candidate_name) }}"
+            data-call-url="{{ url_for('call_link', phone=row.phone or '0') }}"
+            data-call-connected="{{ row.call_connected or '' }}"
+            data-job-interest="{{ row.job_interest or '' }}"
+            data-interview-availability="{{ row.interview_availability or '' }}"
+            data-followup-at="{{ row.next_followup_at or '' }}">
+          <td><input type="checkbox" class="row-check"></td>
+          <td class="candidate-cell">
+            <a class="candidate-name candidate-name-link" href="{{ url_for('profile_detail', profile_id=row.id) }}">{{ row.candidate_name }}</a>
+            <div class="candidate-meta">#{{ row.id }}{% if row.email %} · {{ row.email }}{% endif %}</div>
+            {% if row.next_followup_at %}<div class="candidate-followup">Follow-up: {{ row.next_followup_at }}</div>{% endif %}
+          </td>
+          <td>{{ row.recruiter_code }}</td>
+          <td>{{ row.phone or '-' }}</td>
+          <td>{{ row.process or '-' }}</td>
+          <td><span class="status {{ row.workflow_status }}">{{ row.workflow_status|replace('_', ' ') }}</span></td>
+          <td>{{ row.next_followup_at or '-' }}</td>
+          <td class="actions sticky-actions action-icons-cell">
+            <a class="icon-btn icon-btn-open" aria-label="Open profile" title="Open profile" href="{{ url_for('profile_detail', profile_id=row.id) }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"/></svg>
+            </a>
+            <a class="icon-btn icon-btn-whatsapp" aria-label="Open WhatsApp" title="Open WhatsApp" href="{{ url_for('whatsapp_link', phone=row.phone or '0', candidate_name=row.candidate_name) }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.77 14.8L2 22l5.36-1.2A10 10 0 1 0 12 2Zm0 18a8.03 8.03 0 0 1-4.08-1.12l-.3-.18-3.18.72.7-3.1-.2-.31A8 8 0 1 1 12 20Zm4.36-5.93c-.24-.12-1.4-.7-1.62-.78-.21-.08-.37-.12-.53.12-.16.24-.61.78-.75.94-.14.16-.27.18-.5.06-.24-.12-1-.37-1.9-1.18-.7-.62-1.17-1.38-1.31-1.61-.14-.24-.01-.36.1-.47.1-.1.24-.27.35-.41.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.53-1.27-.73-1.74-.19-.46-.38-.4-.53-.4h-.45c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.31.98 2.47c.12.16 1.68 2.57 4.06 3.6.57.24 1.02.38 1.37.49.58.18 1.1.15 1.52.09.46-.07 1.4-.58 1.6-1.14.2-.56.2-1.03.14-1.13-.06-.1-.22-.16-.46-.28Z"/></svg>
+            </a>
+            <a class="icon-btn icon-btn-call" aria-label="Call candidate" title="Call candidate" href="{{ url_for('call_link', phone=row.phone or '0') }}" onclick="event.stopPropagation()">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.62 10.79a15.46 15.46 0 0 0 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20a1 1 0 0 1-1 1C10.3 21 3 13.7 3 4a1 1 0 0 1 1-1h3.5c.55 0 1 .45 1 1 0 1.24.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2Z"/></svg>
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">No profiles found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="dialer-modal" id="batchDialerModal" hidden>
+  <div class="dialer-backdrop" data-close-dialer></div>
+  <div class="dialer-card dialer-card-wide">
+    <div class="dialer-head">
+      <div>
+        <div class="dialer-label">Batch Dialer</div>
+        <h3 id="dialerCandidateName">No candidate selected</h3>
+        <p id="dialerCandidateMeta">Select rows and start the queue.</p>
+      </div>
+      <button class="icon-btn icon-btn-ghost" type="button" data-close-dialer aria-label="Close dialer">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.7 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+      </button>
+    </div>
+    <div class="dialer-progress" id="dialerProgress">Queue not started</div>
+    <div class="dialer-meta-strip">
+      <span id="dialerMetaPhone">-</span>
+      <span id="dialerMetaRecruiter">-</span>
+      <span id="dialerMetaProcess">-</span>
+    </div>
+
+    <div class="dialer-quick-grid">
+      <section class="quick-panel">
+        <div class="quick-panel-head">
+          <h4>Status</h4>
+          <button class="btn btn-light btn-sm" type="button" id="dialerSaveStatusBtn">Save Status</button>
+        </div>
+        <div class="quick-status-stack">
+          <div class="quick-status-group js-quick-choice" data-field="call_connected">
+            <div class="quick-status-label">Call Connected</div>
+            <div class="choice-group compact-choice">
+              {% for option in masters.call_connected %}
+              <button type="button" class="choice-pill" data-value="{{ option.value }}">{{ option.value }}</button>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="quick-status-group js-quick-choice" data-field="job_interest">
+            <div class="quick-status-label">Interested</div>
+            <div class="choice-group compact-choice">
+              {% for option in ['Yes','No'] %}
+              <button type="button" class="choice-pill" data-value="{{ option }}">{{ option }}</button>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="quick-status-group js-quick-choice" data-field="interview_availability">
+            <div class="quick-status-label">Interview</div>
+            <div class="choice-group compact-choice">
+              {% for option in masters.interview_availability %}
+              <button type="button" class="choice-pill" data-value="{{ option.value }}">{{ option.value }}</button>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="quick-panel">
+        <div class="quick-panel-head">
+          <h4>Add Notes</h4>
+          <button class="btn btn-light btn-sm" type="button" id="dialerSaveNoteBtn">Save Note</button>
+        </div>
+        <textarea id="dialerNoteInput" rows="6" placeholder="Add a fresh note. It will append to history without replacing older notes."></textarea>
+      </section>
+
+      <section class="quick-panel">
+        <div class="quick-panel-head">
+          <h4>Follow Up</h4>
+          <button class="btn btn-light btn-sm" type="button" id="dialerSaveFollowupBtn">Set Follow-up</button>
+        </div>
+        <label class="quick-followup-field">
+          <span>Date & Time</span>
+          <input type="datetime-local" id="dialerFollowupInput">
+        </label>
+        <div class="quick-followup-note">A reminder notification will appear in the CRM when the time becomes due.</div>
+      </section>
+    </div>
+
+    <div class="dialer-actions dialer-actions-wide">
+      <button class="btn btn-light" type="button" id="dialerOpenProfileBtn">Open Profile</button>
+      <button class="btn btn-primary" type="button" id="dialerCallBtn">Call Candidate</button>
+      <button class="btn btn-dark" type="button" id="dialerNextBtn">End Call &amp; Dial Next + WhatsApp</button>
+      <button class="btn btn-light" type="button" data-close-dialer>Close</button>
+    </div>
+  </div>
+</section>
+{% endblock %}

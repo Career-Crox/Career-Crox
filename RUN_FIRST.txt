@@ -1,0 +1,4 @@
+1) Run the SQL file from 3_SUPABASE in Supabase SQL Editor.
+2) Add DATABASE_URL and SECRET_KEY in Render Environment.
+3) Upload 2_GITHUB_UPLOAD to GitHub.
+4) Redeploy Render.

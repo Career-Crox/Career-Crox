@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% set title = "Profile Form" %}
+{% set heading = "Candidate Profile" %}
+{% set subtitle = "Structured candidate profile with fast quick actions." %}
+{% block content %}
+{% set location_values = masters.locations|map(attribute='value')|list %}
+{% set qualification_values = masters.qualifications|map(attribute='value')|list %}
+{% set degree_values = masters.degrees|map(attribute='value')|list %}
+{% set process_values = masters.processes|map(attribute='value')|list %}
+{% set gap_values = masters.career_gaps|map(attribute='value')|list %}
+{% set interview_values = masters.interview_availability|map(attribute='value')|list %}
+{% set current_interest = profile.job_interest if profile else 'Yes' %}
+<form method="post" enctype="multipart/form-data" class="panel form-panel form-surface-flat">
+  <div class="panel-head panel-head-tight">
+    <div>
+      <h3>{% if profile %}Edit Profile #{{ profile.id }}{% else %}New Profile{% endif %}</h3>
+      <div class="sub-caption">Three-column form with aligned fields and quick actions.</div>
+    </div>
+    <div class="head-actions head-actions-wide profile-top-actions">
+      {% if profile %}
+      <div class="profile-nav-actions">
+        <a class="icon-btn icon-btn-ghost {% if not prev_profile_id %}is-disabled{% endif %}" {% if prev_profile_id %}href="{{ url_for('profile_detail', profile_id=prev_profile_id) }}"{% else %}aria-disabled="true"{% endif %} title="Previous profile">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+        </a>
+        <a class="icon-btn icon-btn-ghost {% if not next_profile_id %}is-disabled{% endif %}" {% if next_profile_id %}href="{{ url_for('profile_detail', profile_id=next_profile_id) }}"{% else %}aria-disabled="true"{% endif %} title="Next profile">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.59 16.59 1.41 1.41 6-6-6-6-1.41 1.41L13.17 12z"/></svg>
+        </a>
+      </div>
+      {% if profile.phone %}
+      <a class="icon-btn icon-btn-whatsapp" href="{{ url_for('whatsapp_link', phone=profile.phone, candidate_name=profile.candidate_name) }}" title="Open WhatsApp" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.77 14.8L2 22l5.36-1.2A10 10 0 1 0 12 2Zm0 18a8.03 8.03 0 0 1-4.08-1.12l-.3-.18-3.18.72.7-3.1-.2-.31A8 8 0 1 1 12 20Zm4.36-5.93c-.24-.12-1.4-.7-1.62-.78-.21-.08-.37-.12-.53.12-.16.24-.61.78-.75.94-.14.16-.27.18-.5.06-.24-.12-1-.37-1.9-1.18-.7-.62-1.17-1.38-1.31-1.61-.14-.24-.01-.36.1-.47.1-.1.24-.27.35-.41.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.53-1.27-.73-1.74-.19-.46-.38-.4-.53-.4h-.45c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.31.98 2.47c.12.16 1.68 2.57 4.06 3.6.57.24 1.02.38 1.37.49.58.18 1.1.15 1.52.09.46-.07 1.4-.58 1.6-1.14.2-.56.2-1.03.14-1.13-.06-.1-.22-.16-.46-.28Z"/></svg>
+      </a>
+      <a class="icon-btn icon-btn-call" href="{{ url_for('call_link', phone=profile.phone) }}" title="Call candidate">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.62 10.79a15.46 15.46 0 0 0 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20a1 1 0 0 1-1 1C10.3 21 3 13.7 3 4a1 1 0 0 1 1-1h3.5c.55 0 1 .45 1 1 0 1.24.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2Z"/></svg>
+      </a>
+      {% endif %}
+      {% endif %}
+      <button class="btn btn-light" name="action" value="save" type="submit">Save</button>
+      <button class="btn btn-primary" name="action" value="submit" type="submit">Submit for Approval</button>
+    </div>
+  </div>
+
+  <div class="grid form-grid form-grid-three js-sortable-grid" data-storage-key="career-crox-profile-form-layout">
+    <label data-sort-key="candidate-id">
+      <span>Candidate ID</span>
+      <input value="{{ profile.id if profile else 'Auto' }}" readonly>
+    </label>
+    <label data-sort-key="recruiter-code">
+      <span>Recruiter Code</span>
+      <input value="{{ me.user_code }}" readonly>
+    </label>
+    <label data-sort-key="name">
+      <span>Name</span>
+      <input type="text" name="candidate_name" value="{{ profile.candidate_name if profile else '' }}">
+    </label>
+
+    <div class="field-block" data-sort-key="call-connected">
+      <span>Call Connected</span>
+      <div class="choice-group js-choice-group" data-target="call_connected">
+        {% set current_call = profile.call_connected if profile else '' %}
+        <input type="hidden" name="call_connected" value="{{ current_call }}">
+        {% for option in masters.call_connected %}
+        <button type="button" class="choice-pill {% if current_call == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="field-block" data-sort-key="job-interest">
+      <span>Interested / Looking for Job</span>
+      <div class="choice-group js-choice-group" data-target="job_interest">
+        <input type="hidden" name="job_interest" value="{{ current_interest }}">
+        {% for opt in ['Yes', 'No'] %}
+        <button type="button" class="choice-pill {% if current_interest == opt %}active{% endif %}" data-value="{{ opt }}">{{ opt }}</button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <label data-sort-key="number">
+      <span>Number</span>
+      <input type="text" name="phone" value="{{ profile.phone if profile else '' }}">
+    </label>
+    <label data-sort-key="email">
+      <span>Email</span>
+      <input type="email" name="email" value="{{ profile.email if profile else '' }}">
+    </label>
+    <label data-sort-key="submission-date">
+      <span>Submission Date</span>
+      <input type="date" name="submission_date" value="{{ profile.submission_date if profile else today }}">
+    </label>
+
+    <div class="field-block" data-sort-key="qualification">
+      <span>Qualification</span>
+      {% set current_qualification = profile.qualification if profile else '' %}
+      <div class="choice-group js-choice-group" data-target="qualification">
+        <input type="hidden" name="qualification" value="{{ current_qualification }}">
+        {% for option in masters.qualifications %}
+        <button type="button" class="choice-pill {% if current_qualification == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+        {% endfor %}
+        {% if current_qualification and current_qualification not in qualification_values %}
+        <button type="button" class="choice-pill active" data-value="{{ current_qualification }}">{{ current_qualification }}</button>
+        {% endif %}
+        <button type="button" class="choice-pill choice-pill-add js-show-add-input" data-target-id="qualification_new_wrap">Add New</button>
+      </div>
+      <div class="inline-add-wrap {% if not current_qualification or current_qualification in qualification_values %}hidden{% endif %}" id="qualification_new_wrap">
+        <input type="text" name="qualification_new" placeholder="Add qualification">
+      </div>
+    </div>
+
+    <label data-sort-key="location">
+      <span>Location</span>
+      {% set current_location = profile.location if profile else '' %}
+      <select name="location" class="js-add-option-select" data-target-id="location_new_wrap">
+        <option value="">Select</option>
+        {% for option in masters.locations %}
+        <option value="{{ option.value }}" {% if current_location == option.value %}selected{% endif %}>{{ option.value }}</option>
+        {% endfor %}
+        {% if current_location and current_location not in location_values %}
+        <option value="{{ current_location }}" selected>{{ current_location }}</option>
+        {% endif %}
+        <option value="__add_new__">Add New</option>
+      </select>
+      <div class="inline-add-wrap hidden" id="location_new_wrap">
+        <input type="text" name="location_new" placeholder="Add location">
+      </div>
+    </label>
+
+    <label data-sort-key="preferred-location">
+      <span>Preferred Location</span>
+      {% set current_preferred_location = profile.preferred_location if profile else '' %}
+      <select name="preferred_location" class="js-add-option-select" data-target-id="preferred_location_new_wrap">
+        <option value="">Select</option>
+        {% for option in masters.locations %}
+        <option value="{{ option.value }}" {% if current_preferred_location == option.value %}selected{% endif %}>{{ option.value }}</option>
+        {% endfor %}
+        {% if current_preferred_location and current_preferred_location not in location_values %}
+        <option value="{{ current_preferred_location }}" selected>{{ current_preferred_location }}</option>
+        {% endif %}
+        <option value="__add_new__">Add New</option>
+      </select>
+      <div class="inline-add-wrap hidden" id="preferred_location_new_wrap">
+        <input type="text" name="preferred_location_new" placeholder="Add preferred location">
+      </div>
+    </label>
+
+    <div class="field-block" data-sort-key="degree">
+      <span>Degree</span>
+      {% set current_degree = profile.degree if profile else '' %}
+      <div class="choice-group js-choice-group" data-target="degree">
+        <input type="hidden" name="degree" value="{{ current_degree }}">
+        {% for option in masters.degrees %}
+        <button type="button" class="choice-pill {% if current_degree == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+        {% endfor %}
+        {% if current_degree and current_degree not in degree_values %}
+        <button type="button" class="choice-pill active" data-value="{{ current_degree }}">{{ current_degree }}</button>
+        {% endif %}
+        <button type="button" class="choice-pill choice-pill-add js-show-add-input" data-target-id="degree_new_wrap">Add New</button>
+      </div>
+      <div class="inline-add-wrap {% if not current_degree or current_degree in degree_values %}hidden{% endif %}" id="degree_new_wrap">
+        <input type="text" name="degree_new" placeholder="Add degree">
+      </div>
+    </div>
+
+    <div class="field-block" data-sort-key="process">
+      <span>Process</span>
+      {% set current_process = profile.process if profile else '' %}
+      <div class="choice-group js-choice-group" data-target="process">
+        <input type="hidden" name="process" value="{{ current_process }}">
+        {% for option in masters.processes %}
+        <button type="button" class="choice-pill {% if current_process == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+        {% endfor %}
+        {% if current_process and current_process not in process_values %}
+        <button type="button" class="choice-pill active" data-value="{{ current_process }}">{{ current_process }}</button>
+        {% endif %}
+        <button type="button" class="choice-pill choice-pill-add js-show-add-input" data-target-id="process_new_wrap">Add New</button>
+      </div>
+      <div class="inline-add-wrap {% if not current_process or current_process in process_values %}hidden{% endif %}" id="process_new_wrap">
+        <input type="text" name="process_new" placeholder="Add process">
+      </div>
+    </div>
+
+    <label data-sort-key="career-gap">
+      <span>Career Gap</span>
+      {% set current_gap = profile.career_gap if profile else '' %}
+      <select name="career_gap" class="js-add-option-select" data-target-id="career_gap_new_wrap">
+        <option value="">Select</option>
+        {% for option in masters.career_gaps %}
+        <option value="{{ option.value }}" {% if current_gap == option.value %}selected{% endif %}>{{ option.value }}</option>
+        {% endfor %}
+        {% if current_gap and current_gap not in gap_values %}
+        <option value="{{ current_gap }}" selected>{{ current_gap }}</option>
+        {% endif %}
+        <option value="__add_new__">Add New</option>
+      </select>
+      <div class="inline-add-wrap hidden" id="career_gap_new_wrap">
+        <input type="text" name="career_gap_new" placeholder="Add career gap option">
+      </div>
+    </label>
+
+    <label data-sort-key="next-followup">
+      <span>Next Follow-up</span>
+      <input value="{{ profile.next_followup_at if profile and profile.next_followup_at else '' }}" readonly>
+      <small>Set from Candidates page quick actions.</small>
+    </label>
+
+    <label data-sort-key="total-experience">
+      <span>Total Experience</span>
+      <input type="number" name="total_experience" value="{{ profile.total_experience if profile else '' }}">
+    </label>
+    <label data-sort-key="relevant-experience">
+      <span>Relevant Experience</span>
+      <input type="number" name="relevant_experience" value="{{ profile.relevant_experience if profile else '' }}">
+    </label>
+    <label data-sort-key="inhand-monthly">
+      <span>In-hand Monthly</span>
+      <input type="number" name="inhand_monthly" value="{{ profile.inhand_monthly if profile else '' }}">
+    </label>
+    <label data-sort-key="ctc-monthly">
+      <span>CTC Monthly</span>
+      <input type="number" name="ctc_monthly" value="{{ profile.ctc_monthly if profile else '' }}">
+    </label>
+
+    <div class="field-block" data-sort-key="interview-availability">
+      <span>Interview Availability</span>
+      {% set current_interview = profile.interview_availability if profile else '' %}
+      <div class="choice-group js-choice-group" data-target="interview_availability">
+        <input type="hidden" name="interview_availability" value="{{ current_interview }}">
+        {% for option in masters.interview_availability %}
+        <button type="button" class="choice-pill {% if current_interview == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+        {% endfor %}
+        {% if current_interview and current_interview not in interview_values %}
+        <button type="button" class="choice-pill active" data-value="{{ current_interview }}">{{ current_interview }}</button>
+        {% endif %}
+        <button type="button" class="choice-pill choice-pill-add js-show-add-input" data-target-id="interview_new_wrap">Add New</button>
+      </div>
+      <div class="inline-add-wrap {% if not current_interview or current_interview in interview_values %}hidden{% endif %}" id="interview_new_wrap">
+        <input type="text" name="interview_availability_new" placeholder="Add interview option">
+      </div>
+    </div>
+
+    <label data-sort-key="resume">
+      <span>Resume</span>
+      <input type="file" name="resume_file">
+      {% if profile and profile.resume_file %}<small>{{ profile.resume_file }}</small>{% endif %}
+    </label>
+
+    <label data-sort-key="recording">
+      <span>Recording</span>
+      <input type="file" name="recording_file">
+      {% if profile and profile.recording_file %}<small>{{ profile.recording_file }}</small>{% endif %}
+    </label>
+
+    <label class="full" data-sort-key="notes">
+      <span>Notes</span>
+      <textarea name="notes" rows="4">{{ profile.notes if profile else '' }}</textarea>
+    </label>
+  </div>
+  {% if profile %}
+  <section class="panel quick-edit-panel">
+    <div class="panel-head panel-head-tight">
+      <div>
+        <h3>Quick Actions</h3>
+        <div class="sub-caption">Status, notes, and follow-up without disturbing the main form.</div>
+      </div>
+    </div>
+    <div class="profile-quick-grid" data-profile-quick-panel data-profile-id="{{ profile.id }}">
+      <section class="quick-panel">
+        <div class="quick-panel-head"><h4>Status</h4></div>
+        <div class="quick-status-stack">
+          <div class="quick-status-group">
+            <div class="quick-status-label">Call Connected</div>
+            <div class="choice-group compact-choice js-quick-choice" data-field="call_connected">
+              {% for option in masters.call_connected %}
+              <button type="button" class="choice-pill {% if profile.call_connected == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="quick-status-group">
+            <div class="quick-status-label">Interested / Looking for Job</div>
+            <div class="choice-group compact-choice js-quick-choice" data-field="job_interest">
+              {% for opt in ['Yes', 'No'] %}
+              <button type="button" class="choice-pill {% if profile.job_interest == opt %}active{% endif %}" data-value="{{ opt }}">{{ opt }}</button>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="quick-status-group">
+            <div class="quick-status-label">Interview Availability</div>
+            <div class="choice-group compact-choice js-quick-choice" data-field="interview_availability">
+              {% for option in masters.interview_availability %}
+              <button type="button" class="choice-pill {% if profile.interview_availability == option.value %}active{% endif %}" data-value="{{ option.value }}">{{ option.value }}</button>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-dark btn-sm js-profile-status-save" type="button">Save Status</button>
+      </section>
+
+      <section class="quick-panel">
+        <div class="quick-panel-head"><h4>Add Notes</h4></div>
+        <textarea id="profileQuickNoteInput" rows="7" placeholder="Add note"></textarea>
+        <button class="btn btn-light btn-sm js-profile-note-save" type="button">Add Note</button>
+      </section>
+
+      <section class="quick-panel">
+        <div class="quick-panel-head"><h4>Follow Up</h4></div>
+        <div class="quick-followup-field">
+          <input type="datetime-local" id="profileQuickFollowupInput" value="{{ ((profile.next_followup_at or '')|replace(' ', 'T'))[:16] }}">
+          <div class="quick-followup-note">Due time aane par notification auto create ho jayegi.</div>
+        </div>
+        <button class="btn btn-primary btn-sm js-profile-followup-save" type="button">Save Follow Up</button>
+      </section>
+    </div>
+    <div class="dialer-progress profile-quick-progress" id="profileQuickProgress">Ready</div>
+  </section>
+  {% endif %}
+</form>
+
+{% if profile %}
+<section class="panel">
+  <div class="panel-head"><h3>Notes History</h3></div>
+  <div class="notes-history-grid">
+    {% for row in notes %}
+    <article class="note-history-card">
+      <div class="note-history-head">
+        <strong>{{ row.added_by_name }}</strong>
+        <span>{{ row.created_at }}</span>
+      </div>
+      <div class="note-history-code">{{ row.added_by }}</div>
+      <p>{{ row.note_text }}</p>
+    </article>
+    {% else %}
+    <div class="empty">No notes yet.</div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
