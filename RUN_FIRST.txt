@@ -1,4 +1,0 @@
-1) Run 3_SUPABASE/01_RESET_CREATE_SEED.sql in Supabase SQL Editor.
-2) Put DATABASE_URL and SECRET_KEY in Render environment.
-3) Deploy 2_GITHUB_UPLOAD to GitHub and redeploy Render.
-4) Test login with AARYANSH / Arsh.111
