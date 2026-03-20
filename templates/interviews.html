@@ -1,0 +1,74 @@
+
+{% extends "base.html" %}
+{% set title = "Interview" %}
+{% set heading = "Interview Section" %}
+{% set subtitle = "Today, upcoming, and due. You wanted tabs, not archaeology." %}
+{% block content %}
+{% if me.role in ['manager', 'tl'] %}
+<section class="panel">
+  <div class="panel-head"><h3>Schedule Interview</h3></div>
+  <form method="post" class="grid form-grid">
+    <label>
+      <span>Profile</span>
+      <select name="profile_id">
+        {% for row in selectable %}
+        <option value="{{ row.id }}">#{{ row.id }} - {{ row.candidate_name }} ({{ row.recruiter_code }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label><span>Interview Date & Time</span><input type="datetime-local" name="interview_at"></label>
+    <label><span>Stage</span><input type="text" name="stage" value="HR Round"></label>
+    <label><span>Location</span><input type="text" name="location" value="Google Meet"></label>
+    <div class="full"><button class="btn btn-primary">Schedule</button></div>
+  </form>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h3>Interview Tables</h3>
+    <div class="tabs">
+      <a class="tab {% if tab=='today' %}active{% endif %}" href="{{ url_for('interviews', tab='today') }}">Today's Interview</a>
+      <a class="tab {% if tab=='upcoming' %}active{% endif %}" href="{{ url_for('interviews', tab='upcoming') }}">Upcoming Interview</a>
+      <a class="tab {% if tab=='due' %}active{% endif %}" href="{{ url_for('interviews', tab='due') }}">Due Interview</a>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" class="select-all"></th>
+          <th>Candidate</th>
+          <th>Recruiter</th>
+          <th>Interview At</th>
+          <th>Stage</th>
+          <th>Status</th>
+          <th>Location</th>
+          <th class="sticky-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in rows %}
+        <tr class="row-link" data-href="{{ url_for('profile_detail', profile_id=row.profile_id) }}">
+          <td><input type="checkbox" class="row-check"></td>
+          <td>{{ row.candidate_name }}</td>
+          <td>{{ row.recruiter_code }}</td>
+          <td>{{ row.interview_at }}</td>
+          <td>{{ row.stage }}</td>
+          <td><span class="status {{ row.status }}">{{ row.status }}</span></td>
+          <td>{{ row.location }}</td>
+          <td class="actions sticky-actions">
+            <a class="mini-btn" href="{{ url_for('whatsapp_link', phone=row.phone or '0', candidate_name=row.candidate_name) }}" onclick="event.stopPropagation()">WhatsApp</a>
+            <a class="mini-btn" href="{{ url_for('call_link', phone=row.phone or '0') }}" onclick="event.stopPropagation()">Phone</a>
+            <a class="mini-btn" href="{{ url_for('dialer') }}?q={{ row.phone }}" onclick="event.stopPropagation()">Dialer</a>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="empty">No interview rows for this tab.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

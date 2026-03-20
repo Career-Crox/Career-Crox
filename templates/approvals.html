@@ -1,0 +1,58 @@
+
+{% extends "base.html" %}
+{% set title = "Approvals" %}
+{% set heading = "Approvals" %}
+{% set subtitle = "Profiles and newly added dropdown options waiting for TL / Manager approval." %}
+{% block content %}
+<div class="two-col">
+<section class="panel">
+  <div class="panel-head"><h3>Pending Profiles</h3></div>
+  <div class="table-wrap">
+    <table class="data-table compact">
+      <thead><tr><th>ID</th><th>Candidate</th><th>Recruiter</th><th>Submitted</th><th>Action</th></tr></thead>
+      <tbody>
+      {% for row in pending_profiles %}
+        <tr>
+          <td>#{{ row.id }}</td>
+          <td><a href="{{ url_for('profile_detail', profile_id=row.id) }}">{{ row.candidate_name }}</a></td>
+          <td>{{ row.recruiter_code }}</td>
+          <td>{{ row.created_at }}</td>
+          <td class="actions">
+            <a class="mini-btn good" href="{{ url_for('approve_profile', profile_id=row.id, decision='approved') }}">Approve</a>
+            <a class="mini-btn warn" href="{{ url_for('approve_profile', profile_id=row.id, decision='rescheduled') }}">Reschedule</a>
+            <a class="mini-btn bad" href="{{ url_for('approve_profile', profile_id=row.id, decision='rejected') }}">Reject</a>
+          </td>
+        </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No pending profiles.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h3>Pending Master Options</h3></div>
+  <div class="table-wrap">
+    <table class="data-table compact">
+      <thead><tr><th>Category</th><th>Value</th><th>Created By</th><th>Action</th></tr></thead>
+      <tbody>
+      {% for row in pending_masters %}
+        <tr>
+          <td>{{ row.category }}</td>
+          <td>{{ row.value }}</td>
+          <td>{{ row.created_by }}</td>
+          <td class="actions">
+            <a class="mini-btn good" href="{{ url_for('approve_master', master_id=row.id, decision='approve') }}">Approve</a>
+            <a class="mini-btn bad" href="{{ url_for('approve_master', master_id=row.id, decision='reject') }}">Reject</a>
+          </td>
+        </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No pending master options.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+</div>
+{% endblock %}
