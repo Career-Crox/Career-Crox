@@ -1,7 +1,0 @@
-Render Environment
-DATABASE_URL = Supabase Session Pooler URI
-SECRET_KEY = any strong value
-
-GitHub Upload:
-Upload the CONTENTS of this folder to repo root.
-Do not upload the outer folder itself.
