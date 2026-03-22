@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: career-crox-react-node-crm
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    autoDeploy: true
