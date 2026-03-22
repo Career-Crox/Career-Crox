@@ -1,0 +1,42 @@
+CAREER CROX REACT + NODE FEATURE MAP
+
+Is build me Flask wali zip ke main business modules React + Node + Supabase par shift kiye gaye hain:
+
+Included modules:
+- Dashboard
+- Candidates
+- Approvals
+- Submissions
+- JD Centre
+- Interviews
+- Tasks
+- Dialer
+- Attendance / Presence
+- Notifications
+- Team Chat
+- Client Pipeline
+- Client Requirements
+- Revenue Hub
+- Scheduled Reports
+- Performance Centre
+- Team / Users
+- Settings
+- Recent Activity
+
+Included backend behavior:
+- Supabase database CRUD
+- Role-based visibility (manager / TL / recruiter)
+- Single session tracking via active_sessions
+- Candidate notes
+- Candidate import/export/template
+- Approval actions
+- Follow-up list and action
+- Dialer outcome logging
+- Presence ping / break / meeting join
+- Search API
+- Activity logging
+
+Reference included for future extension:
+- Original Flask docs
+- Original sample data
+- Original Flask app.py

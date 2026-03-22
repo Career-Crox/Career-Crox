@@ -1,0 +1,11 @@
+1) Zip extract karo.
+2) Folder VS Code me kholo.
+3) .env.example ko copy karke .env banao.
+4) .env me SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET bharo.
+5) Terminal me chalao:
+   npm install
+   npm start
+6) Browser me kholo:
+   http://localhost:10000
+7) Agar first run hai to manager account banao.
+8) Production / Render ke liye render.yaml already diya hua hai.
